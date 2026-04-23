@@ -420,7 +420,18 @@ const normalizeProfileFields = (profile) => {
       normalized.id = numValue; // Also set id for frontend
       console.log(`   Found Can_ID: ${key} = ${value} -> converted to ${numValue}`);
     } else if (key === 'Visa type' || key === 'visaType') {
-      normalized.visaType = value;
+  normalized.visaType = value;
+} else if (key === 'Visa Validity' || key === 'visaValidity' || key === 'visaValidityDate') {
+  normalized.visaValidity = value;
+  // Also store as Date object for easier comparison
+  if (value) {
+    try {
+      normalized.visaValidityDate = new Date(value);
+    } catch (e) {
+      console.warn(`Invalid visa validity date: ${value}`);
+    }
+  }
+
     } else if (key === 'resumePath') {
       normalized.resumePath = value;
     } else if (key === 'googleDriveFileId') {
@@ -438,6 +449,7 @@ const normalizeProfileFields = (profile) => {
     } else {
       normalized[key] = value;
     }
+
   }
   
   // Ensure canId and id are set if they weren't found
@@ -476,6 +488,7 @@ const formatProfileForResponse = (profile) => {
   console.log(`   Raw skills type: ${typeof rawSkills}`);
   
   normalized.keySkills = extractSkillsArray(rawSkills);
+  normalized.visaValidity = profile['Visa Validity'] || profile.visaValidity || null;
   
   console.log(`   Final skills array (${normalized.keySkills.length} items):`, normalized.keySkills);
   console.log(`   Final canId: ${normalized.canId}, id: ${normalized.id}`);
@@ -1354,7 +1367,21 @@ if (typeof keySkills === 'string') {
   keySkills = [];
 }
 
-// Prepare profile data
+/// In the POST route, update the profileData section
+let visaValidityValue = null;
+
+// Handle visa validity - convert empty string to null
+if (req.body.visaValidity === '') {
+  visaValidityValue = null;
+  console.log("📝 POST - Setting visaValidity to NULL (no visa validity)");
+} else if (req.body.visaValidity) {
+  visaValidityValue = req.body.visaValidity;
+  console.log("📝 POST - Setting visaValidity to:", visaValidityValue);
+} else {
+  visaValidityValue = null;
+  console.log("📝 POST - No visaValidity provided, setting to NULL");
+}
+
 const profileData = {
   "Candidate Name": req.body.name,
   "Email": req.body.email,
@@ -1370,6 +1397,7 @@ const profileData = {
   "Key Skills": keySkills,
   "Can_ID": nextCanId,
   "Visa type": req.body.visaType || "NA",
+  "Visa Validity": visaValidityValue,  // Use the processed value
   "resumePath": resumePath,
   "googleDriveFileId": googleDriveFileId,
   "googleDriveViewLink": googleDriveViewLink,
@@ -1377,8 +1405,7 @@ const profileData = {
   "createdAt": new Date().toISOString(),
   "updatedAt": new Date().toISOString(),
   "id": nextCanId,
-  // ✅ ADD THIS FLAG
-  "isInProgress": false,  // false = not in progress, true = in progress
+  "isInProgress": false,
   "lastStatusUpdate": new Date().toISOString()
 };
 
@@ -1698,8 +1725,21 @@ if (typeof keySkills === 'string') {
   keySkills = [];
 }
 
-    // Prepare update data
-// Prepare update data - with non-editable submission date
+// Prepare update data
+let visaValidityValue = null;
+
+// Handle visa validity - convert empty string to null
+if (req.body.visaValidity === '') {
+  visaValidityValue = null;
+  console.log("📝 Setting visaValidity to NULL (clearing the field)");
+} else if (req.body.visaValidity) {
+  visaValidityValue = req.body.visaValidity;
+  console.log("📝 Setting visaValidity to:", visaValidityValue);
+} else {
+  visaValidityValue = formattedExisting.visaValidity || null;
+  console.log("📝 Keeping existing visaValidity:", visaValidityValue);
+}
+
 const updateData = {
   "Candidate Name": req.body.name,
   "Email": req.body.email,
@@ -1716,6 +1756,7 @@ const updateData = {
   "Key Skills": Array.isArray(keySkills) ? keySkills : (keySkills || formattedExisting.keySkills || []),
   "Can_ID": formattedExisting.canId || id,
   "Visa type": req.body.visaType || formattedExisting.visaType || "NA",
+  "Visa Validity": visaValidityValue,  // Use the processed value
   "resumePath": resumePath,
   "googleDriveFileId": googleDriveFileId,
   "googleDriveViewLink": googleDriveViewLink,
@@ -1724,6 +1765,8 @@ const updateData = {
   "createdAt": formattedExisting.createdAt,
   "id": formattedExisting.id || id
 };
+
+console.log("📝 Final updateData with Visa Validity:", updateData["Visa Validity"]);
 
     console.log("Updating candidate profile...");
 

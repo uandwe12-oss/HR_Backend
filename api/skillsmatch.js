@@ -152,6 +152,10 @@ router.get("/", async (req, res) => {
 /**
  * GET – Fetch All Skills with Counts (For Dropdown)
  */
+/**
+ * GET – Fetch All Skills with Counts (For Dropdown)
+ * Sorted alphabetically
+ */
 router.get("/skills", async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
@@ -193,11 +197,11 @@ router.get("/skills", async (req, res) => {
       count: skillCountMap.get(skillName) || 0
     }));
     
-    // Sort by count descending
-    skills.sort((a, b) => {
-      if (b.count !== a.count) return b.count - a.count;
-      return a.name.localeCompare(b.name);
-    });
+    // ✅ FILTER: Remove skills with count = 0 (optional - uncomment if needed)
+    // const filteredSkills = skills.filter(skill => skill.count > 0);
+    
+    // ✅ SORT: Alphabetically by name (A to Z)
+    skills.sort((a, b) => a.name.localeCompare(b.name));
     
     // Get total candidates count
     const totalCandidatesResult = await session.run(

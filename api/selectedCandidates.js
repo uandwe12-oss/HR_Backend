@@ -434,7 +434,7 @@ const pendingStatuses = [
 const isInProgress = pendingStatuses.includes(status);
 
 try {
-  await axios.put(`https://myuandwe-bg.vercel.app/api/candidates/${candidateId}/progress`, {
+  await axios.put(`http://localhost:5000/api/candidates/${candidateId}/progress`, {
     isInProgress: isInProgress
   });
   console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);

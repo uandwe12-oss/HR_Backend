@@ -11,7 +11,8 @@ const app = express();
 
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://myuandwe.vercel.app"
+  "https://myuandwe.vercel.app",
+  "https://uandwe.com"
 ];
 
 app.use((req, res, next) => {
@@ -52,7 +53,10 @@ app.use("/api/shortcandidates", require("./api/shortcandidates"));
 app.use("/api/users", require("./api/users"));
 app.use("/api/selected-candidates", require("./api/selectedCandidates"));
 app.use("/api/zone", require("./api/zone"));
+app.use("/api/holiday", require("./api/holiday"));
+app.use('/api/personal-details', require("./api/personalDetails"));
 app.use("/api/visa", require("./api/visa"));
+
 /* ================================
    SWAGGER CONFIG
 ================================ */
@@ -67,7 +71,7 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: "https://myuandwe-bg.vercel.app"
+        url: process.env.BASE_URL || "http://localhost:5000"
       }
     ]
   },
@@ -101,5 +105,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-module.exports = app;
+const PORT = process.env.PORT || 5000;
 
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Personal details API available at: http://localhost:${PORT}/api/personal-details`);
+});
+
+module.exports = app;
