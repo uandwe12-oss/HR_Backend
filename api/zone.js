@@ -20,14 +20,31 @@ const toNumber = (value) => {
  * =================================================
  */
 const ZONE_STATUSES = [
-  'Client Interview Reject',
-  'Client Screening Reject', 
-  'Screening Reject',
-  'Interview Reject'
+  'offer decline',
+  'client interview reject',
+  'client screening reject',
+  'screening reject',
+  'interview reject'
 ];
 
 const isZoneStatus = (status) => {
-  return ZONE_STATUSES.includes(status);
+  if (!status) return false;
+
+  const normalized = status.trim().toLowerCase();
+
+  // Handle aliases
+  const aliases = {
+    'offer declined': 'offer decline',
+    'offer reject': 'offer decline',
+    'offer rejected': 'offer decline'
+  };
+  console.log("FINAL STATUS CHECK:", {
+    original: status,
+    normalized: status?.trim()?.toLowerCase()
+  });
+  const finalStatus = aliases[normalized] || normalized;
+
+  return ZONE_STATUSES.includes(finalStatus);
 };
 
 /**
@@ -36,20 +53,25 @@ const isZoneStatus = (status) => {
 const deleteZoneEntry = async (candidateId, clientName) => {
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
-      MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
-      DELETE z
-      RETURN count(z) as deletedCount
+MATCH (z:Zone)
+WHERE toFloat(z.candidateId) = toFloat($candidateId)
+AND toLower(trim(z.clientName)) = toLower(trim($clientName))
+
+WITH collect(z) as zones, count(z) as deletedCount
+
+FOREACH (zone IN zones | DELETE zone)
+
+RETURN deletedCount
     `, {
       candidateId: parseInt(candidateId),
       clientName: clientName
     });
-    
+
     const deletedCount = toNumber(result.records[0].get('deletedCount'));
     if (deletedCount > 0) {
-      console.log(`🗑️ Deleted zone entry for candidate ${candidateId} (client: ${clientName})`);
     }
     return deletedCount;
   } catch (err) {
@@ -67,11 +89,10 @@ const deleteZoneEntry = async (candidateId, clientName) => {
  * =================================================
  */
 const autoCleanupExpiredZones = async () => {
-  console.log(`\n🧹 [AUTO CLEANUP] Checking for expired zone entries at ${new Date().toISOString()}`);
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     // Find expired entries using datetime conversion
     const findResult = await session.run(`
@@ -79,17 +100,15 @@ const autoCleanupExpiredZones = async () => {
       WHERE datetime(z.expiryDate) <= datetime()
       RETURN z.candidateId as candidateId, z.clientName as clientName, z.expiryDate as expiryDate
     `);
-    
+
     const expiredCount = findResult.records.length;
-    
+
     if (expiredCount > 0) {
-      console.log(`📊 Found ${expiredCount} expired zone entries to delete`);
-      
+
       // Log the expired entries
       findResult.records.forEach(record => {
-        console.log(`   - Candidate ${record.get('candidateId')} for client ${record.get('clientName')} (expired: ${record.get('expiryDate')})`);
       });
-      
+
       // Delete expired entries
       const result = await session.run(`
         MATCH (z:Zone)
@@ -97,13 +116,12 @@ const autoCleanupExpiredZones = async () => {
         DELETE z
         RETURN count(z) as deletedCount
       `);
-      
+
       const deletedCount = toNumber(result.records[0].get('deletedCount'));
-      console.log(`✅ [AUTO CLEANUP] Successfully deleted ${deletedCount} expired zone entries`);
     } else {
       console.log(`✅ [AUTO CLEANUP] No expired zone entries found`);
     }
-    
+
   } catch (err) {
     console.error("❌ [AUTO CLEANUP] Error:", err.message);
   } finally {
@@ -120,24 +138,19 @@ let cleanupInterval = null;
 
 const startAutoCleanup = () => {
   if (cleanupInterval) {
-    console.log('⚠️ Auto cleanup already running');
     return;
   }
-  
-  console.log('\n' + '='.repeat(60));
-  console.log('🚀 STARTING AUTO CLEANUP SCHEDULER FOR ZONE ENTRIES');
-  console.log('='.repeat(60));
-  
+
+
   // Run cleanup immediately on startup
   setTimeout(() => {
     autoCleanupExpiredZones();
   }, 5000);
-  
+
   // Run cleanup every hour (instead of 6 hours)
   cleanupInterval = setInterval(autoCleanupExpiredZones, 60 * 60 * 1000);
+
   
-  console.log('⏰ Auto cleanup scheduled to run every hour');
-  console.log('='.repeat(60) + '\n');
 };
 
 /**
@@ -147,7 +160,6 @@ const stopAutoCleanup = () => {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
-    console.log('🛑 Auto cleanup stopped');
   }
 };
 
@@ -162,25 +174,24 @@ module.exports.autoCleanupExpiredZones = autoCleanupExpiredZones;
  * =================================================
  */
 router.get("/", async (req, res) => {
-  console.log(`\n📡 GET /api/zone - Fetching ALL zone entries`);
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
       MATCH (z:Zone)
       RETURN z
       ORDER BY z.createdAt DESC
     `);
-    
+
     const now = new Date();
     const zoneEntries = result.records.map(record => {
       const z = record.get('z').properties;
       const expiryDate = new Date(z.expiryDate);
       const isExpired = expiryDate <= now;
       const daysRemaining = isExpired ? 0 : Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-      
+
       return {
         candidateId: toNumber(z.candidateId),
         demandId: toNumber(z.demandId),
@@ -196,12 +207,11 @@ router.get("/", async (req, res) => {
         status: isExpired ? 'Expired' : 'Active'
       };
     });
-    
+
     const activeCount = zoneEntries.filter(z => !z.isExpired).length;
     const expiredCount = zoneEntries.filter(z => z.isExpired).length;
-    
-    console.log(`📊 Found ${zoneEntries.length} total zone entries (${activeCount} active, ${expiredCount} expired)`);
-    
+
+
     res.json({
       success: true,
       data: zoneEntries,
@@ -210,7 +220,7 @@ router.get("/", async (req, res) => {
       expiredCount: expiredCount,
       message: `Found ${zoneEntries.length} zone entries (${activeCount} active, ${expiredCount} expired)`
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching zone entries:", err);
     res.status(500).json({
@@ -227,25 +237,24 @@ router.get("/", async (req, res) => {
  * GET /api/zone/active - Get ONLY active (non-expired) zone entries
  */
 router.get("/active", async (req, res) => {
-  console.log(`\n📡 GET /api/zone/active - Fetching active zone entries only`);
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
       MATCH (z:Zone)
-      WHERE z.expiryDate > datetime()
+      WHERE datetime(z.expiryDate) > datetime()
       RETURN z
       ORDER BY z.expiryDate ASC
     `);
-    
+
     const zoneEntries = result.records.map(record => {
       const z = record.get('z').properties;
       const expiryDate = new Date(z.expiryDate);
       const now = new Date();
       const daysRemaining = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-      
+
       return {
         candidateId: toNumber(z.candidateId),
         demandId: toNumber(z.demandId),
@@ -259,16 +268,15 @@ router.get("/active", async (req, res) => {
         daysRemaining: daysRemaining
       };
     });
-    
-    console.log(`📊 Found ${zoneEntries.length} active zone entries`);
-    
+
+
     res.json({
       success: true,
       data: zoneEntries,
       count: zoneEntries.length,
       message: `Found ${zoneEntries.length} active zone entries`
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching active zone entries:", err);
     res.status(500).json({
@@ -285,11 +293,10 @@ router.get("/active", async (req, res) => {
  * GET /api/zone/expired - Get ONLY expired zone entries
  */
 router.get("/expired", async (req, res) => {
-  console.log(`\n📡 GET /api/zone/expired - Fetching expired zone entries only`);
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
       MATCH (z:Zone)
@@ -297,13 +304,13 @@ router.get("/expired", async (req, res) => {
       RETURN z
       ORDER BY z.expiryDate DESC
     `);
-    
+
     const zoneEntries = result.records.map(record => {
       const z = record.get('z').properties;
       const expiryDate = new Date(z.expiryDate);
       const now = new Date();
       const daysOverdue = Math.ceil((now - expiryDate) / (1000 * 60 * 60 * 24));
-      
+
       return {
         candidateId: toNumber(z.candidateId),
         demandId: toNumber(z.demandId),
@@ -317,16 +324,15 @@ router.get("/expired", async (req, res) => {
         daysOverdue: daysOverdue
       };
     });
-    
-    console.log(`📊 Found ${zoneEntries.length} expired zone entries`);
-    
+
+
     res.json({
       success: true,
       data: zoneEntries,
       count: zoneEntries.length,
       message: `Found ${zoneEntries.length} expired zone entries`
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching expired zone entries:", err);
     res.status(500).json({
@@ -347,60 +353,60 @@ router.get("/expired", async (req, res) => {
  */
 router.post("/add", async (req, res) => {
   const { candidateId, demandId, clientName, status, reason, rejectedBy } = req.body;
-  
-  console.log(`\n📡 POST /api/zone/add - Processing candidate ${candidateId} for client: ${clientName}`);
-  
+
+
   if (!candidateId || !demandId || !clientName) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "candidateId, demandId, and clientName are required" 
+    return res.status(400).json({
+      success: false,
+      message: "candidateId, demandId, and clientName are required"
     });
   }
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const now = new Date();
     const expiryDate = new Date(now);
     expiryDate.setMonth(expiryDate.getMonth() + 6); // 6 months from now
-    
+
     // Check if candidate already has ANY zone entry for this client (regardless of demand)
     const existingCheck = await session.run(`
-      MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
+     MATCH (z:Zone)
+WHERE toFloat(z.candidateId) = toFloat($candidateId)
+AND toLower(trim(z.clientName)) = toLower(trim($clientName))
       RETURN z
       ORDER BY z.createdAt DESC
       LIMIT 1
-    `, { 
-      candidateId: parseInt(candidateId), 
-      clientName: clientName 
+    `, {
+      candidateId: parseInt(candidateId),
+      clientName: clientName
     });
-    
+
     let result;
+
+    if (existingCheck.records.length > 0) {
+      // Existing entry found - UPDATE it
+      const existingZone = existingCheck.records[0].get('z').properties;
+      const oldExpiryDate = existingZone.expiryDate;
+      const oldDemandId = existingZone.demandId;
+      const oldStatus = existingZone.rejectedStatus;
+
+      // Create previous rejection as JSON string
+      const previousRejection = JSON.stringify({
+        demandId: toNumber(oldDemandId),
+        status: oldStatus,
+        rejectedAt: existingZone.rejectedAt,
+        expiryDate: oldExpiryDate,
+        reason: existingZone.reason
+      });
+
     
- if (existingCheck.records.length > 0) {
-  // Existing entry found - UPDATE it
-  const existingZone = existingCheck.records[0].get('z').properties;
-  const oldExpiryDate = existingZone.expiryDate;
-  const oldDemandId = existingZone.demandId;
-  const oldStatus = existingZone.rejectedStatus;
-  
-  // Create previous rejection as JSON string
-  const previousRejection = JSON.stringify({
-    demandId: toNumber(oldDemandId),
-    status: oldStatus,
-    rejectedAt: existingZone.rejectedAt,
-    expiryDate: oldExpiryDate,
-    reason: existingZone.reason
-  });
-  
-  console.log(`🔄 Found existing zone entry for candidate ${candidateId} (client: ${clientName})`);
-  console.log(`   Old demand: ${oldDemandId}, Old status: ${oldStatus}, Old expiry: ${oldExpiryDate}`);
-  console.log(`   New demand: ${demandId}, New status: ${status}, New expiry: ${expiryDate.toISOString()}`);
-  
-  // Update the existing entry with new rejection details
-  result = await session.run(`
-    MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
+      // Update the existing entry with new rejection details
+      result = await session.run(`
+    MATCH (z:Zone)
+WHERE toFloat(z.candidateId) = toFloat($candidateId)
+AND toLower(trim(z.clientName)) = toLower(trim($clientName))
     SET z.demandId = $demandId,
         z.rejectedStatus = $status,
         z.reason = $reason,
@@ -411,45 +417,43 @@ router.post("/add", async (req, res) => {
         z.previousRejection = $previousRejection
     RETURN z
   `, {
-    candidateId: parseInt(candidateId),
-    clientName: clientName,
-    demandId: parseInt(demandId),
-    status: status,
-    reason: reason || `Rejected with status: ${status}`,
-    rejectedBy: rejectedBy || 'Unknown',
-    rejectedAt: now.toISOString(),
-    expiryDate: expiryDate.toISOString(),
-    updatedAt: now.toISOString(),
-    previousRejection: previousRejection  // Store as JSON string
-  });
-  
-  console.log(`✅ Updated existing zone entry for candidate ${candidateId} (client: ${clientName})`);
-  
-  const updatedZone = result.records[0].get('z').properties;
-  
-  res.json({
-    success: true,
-    action: 'updated',
-    message: `Candidate zone entry updated for client ${clientName}. New expiry: ${expiryDate.toISOString()}`,
-    data: {
-      candidateId: toNumber(updatedZone.candidateId),
-      clientName: updatedZone.clientName,
-      demandId: toNumber(updatedZone.demandId),
-      oldDemandId: toNumber(oldDemandId),
-      rejectedStatus: updatedZone.rejectedStatus,
-      oldStatus: oldStatus,
-      reason: updatedZone.reason,
-      rejectedBy: updatedZone.rejectedBy,
-      rejectedAt: updatedZone.rejectedAt,
-      expiryDate: updatedZone.expiryDate,
-      updatedAt: updatedZone.updatedAt,
-      previousRejection: JSON.parse(updatedZone.previousRejection) // Parse for response
-    }
-  });
-}else {
+        candidateId: parseInt(candidateId),
+        clientName: clientName,
+        demandId: parseInt(demandId),
+        status: status,
+        reason: reason || `Rejected with status: ${status}`,
+        rejectedBy: rejectedBy || 'Unknown',
+        rejectedAt: now.toISOString(),
+        expiryDate: expiryDate.toISOString(),
+        updatedAt: now.toISOString(),
+        previousRejection: previousRejection  // Store as JSON string
+      });
+
+
+      const updatedZone = result.records[0].get('z').properties;
+
+      res.json({
+        success: true,
+        action: 'updated',
+        message: `Candidate zone entry updated for client ${clientName}. New expiry: ${expiryDate.toISOString()}`,
+        data: {
+          candidateId: toNumber(updatedZone.candidateId),
+          clientName: updatedZone.clientName,
+          demandId: toNumber(updatedZone.demandId),
+          oldDemandId: toNumber(oldDemandId),
+          rejectedStatus: updatedZone.rejectedStatus,
+          oldStatus: oldStatus,
+          reason: updatedZone.reason,
+          rejectedBy: updatedZone.rejectedBy,
+          rejectedAt: updatedZone.rejectedAt,
+          expiryDate: updatedZone.expiryDate,
+          updatedAt: updatedZone.updatedAt,
+          previousRejection: JSON.parse(updatedZone.previousRejection) // Parse for response
+        }
+      });
+    } else {
       // No existing entry - CREATE new one
-      console.log(`✨ No existing zone entry found, creating new for candidate ${candidateId} (client: ${clientName})`);
-      
+
       result = await session.run(`
         CREATE (z:Zone {
           candidateId: $candidateId,
@@ -475,11 +479,10 @@ router.post("/add", async (req, res) => {
         expiryDate: expiryDate.toISOString(),
         createdAt: now.toISOString()
       });
-      
+
       const zoneEntry = result.records[0].get('z').properties;
-      
-      console.log(`✅ Created new zone entry for candidate ${candidateId} (client: ${clientName}) until ${expiryDate.toISOString()}`);
-      
+
+
       res.json({
         success: true,
         action: 'created',
@@ -497,7 +500,7 @@ router.post("/add", async (req, res) => {
         }
       });
     }
-    
+
   } catch (err) {
     console.error("❌ Error adding/updating candidate to zone:", err);
     res.status(500).json({
@@ -510,144 +513,143 @@ router.post("/add", async (req, res) => {
   }
 });
 
-/**
- * POST /api/zone/manage
- * Manage zone entry based on candidate status
- * - If status is one of the 4 rejection types: ADD/UPDATE zone entry
- * - If status is anything else: DELETE zone entry if exists
- */
 router.post("/manage", async (req, res) => {
-  const { candidateId, clientName, demandId, status, reason, rejectedBy } = req.body;
-  
-  console.log(`\n📡 POST /api/zone/manage - Processing candidate ${candidateId} for client: ${clientName}`);
-  console.log(`   Status: ${status}`);
-  
+  let { candidateId, clientName, demandId, status, reason, rejectedBy } = req.body;
+
+  // console.log("\n" + "=".repeat(60));
+  // console.log("🚨 ZONE MANAGE ENDPOINT CALLED 🚨");
+  // console.log("=".repeat(60));
+  // console.log("Raw request body:", JSON.stringify(req.body, null, 2));
+  // console.log("candidateId:", candidateId, "type:", typeof candidateId);
+  // console.log("clientName:", clientName);
+  // console.log("demandId:", demandId);
+  // console.log("status:", status, "type:", typeof status);
+  // console.log("status length:", status?.length);
+  // console.log("status trimmed:", status?.trim());
+  // console.log("status === 'Offer Decline':", status === 'Offer Decline');
+  // console.log("status.trim() === 'Offer Decline':", status?.trim() === 'Offer Decline');
+  // console.log("ZONE_STATUSES:", ZONE_STATUSES);
+  // console.log("isZoneStatus() result:", isZoneStatus(status));
+
   if (!candidateId || !clientName) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "candidateId and clientName are required" 
+    // console.log("❌ Missing required fields");
+    return res.status(400).json({
+      success: false,
+      message: "candidateId and clientName are required"
     });
   }
-  
+
   const driver = getDriver();
+  if (!driver) {
+    console.error("❌ Database driver not initialized!");
+    return res.status(500).json({
+      success: false,
+      message: "Database driver not initialized"
+    });
+  }
+
   const session = driver.session();
-  
+
   try {
-    // Check if this is a zone-status (one of the 4 rejection types)
     if (isZoneStatus(status)) {
-      console.log(`✅ Status "${status}" is a zone status - Adding/Updating zone entry`);
-      
-      // Add or update zone entry
+      // console.log("✅ Status is a zone status - Proceeding with zone creation");
+
       const now = new Date();
       const expiryDate = new Date(now);
       expiryDate.setMonth(expiryDate.getMonth() + 6);
-      
-      // Check if candidate already has zone entry for this client
-      const existingCheck = await session.run(`
-        MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
-        RETURN z
-        ORDER BY z.createdAt DESC
-        LIMIT 1
-      `, { 
-        candidateId: parseInt(candidateId), 
-        clientName: clientName 
-      });
-      
-      if (existingCheck.records.length > 0) {
-        // UPDATE existing entry
-        const existingZone = existingCheck.records[0].get('z').properties;
-        
-        const previousRejection = JSON.stringify({
-          demandId: toNumber(existingZone.demandId),
-          status: existingZone.rejectedStatus,
-          rejectedAt: existingZone.rejectedAt,
-          expiryDate: existingZone.expiryDate,
-          reason: existingZone.reason
-        });
-        
-        await session.run(`
-          MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
-          SET z.demandId = $demandId,
-              z.rejectedStatus = $status,
-              z.reason = $reason,
-              z.rejectedBy = $rejectedBy,
-              z.rejectedAt = $rejectedAt,
-              z.expiryDate = $expiryDate,
-              z.updatedAt = $updatedAt,
-              z.previousRejection = $previousRejection
-        `, {
-          candidateId: parseInt(candidateId),
-          clientName: clientName,
-          demandId: demandId ? parseInt(demandId) : null,
-          status: status,
-          reason: reason || `Rejected with status: ${status}`,
-          rejectedBy: rejectedBy || 'Unknown',
-          rejectedAt: now.toISOString(),
-          expiryDate: expiryDate.toISOString(),
-          updatedAt: now.toISOString(),
-          previousRejection: previousRejection
-        });
-        
+
+      // console.log("Creating zone entry with:", {
+      //   candidateId: parseInt(candidateId),
+      //   clientName: clientName,
+      //   demandId: demandId ? parseInt(demandId) : null,
+      //   status: status,
+      //   expiryDate: expiryDate.toISOString()
+      // });
+
+      // Create zone entry directly without checking for existing
+      const createResult = await session.run(`
+  OPTIONAL MATCH (existing:Zone)
+WHERE toFloat(existing.candidateId) = toFloat($candidateId)  AND toLower(trim(existing.clientName)) = toLower(trim($clientName))
+
+  WITH existing
+
+  FOREACH (_ IN CASE WHEN existing IS NOT NULL THEN [1] ELSE [] END |
+    SET existing.demandId = $demandId,
+        existing.rejectedStatus = $status,
+        existing.reason = $reason,
+        existing.rejectedBy = $rejectedBy,
+        existing.rejectedAt = $rejectedAt,
+        existing.expiryDate = $expiryDate,
+        existing.updatedAt = $createdAt
+  )
+
+  FOREACH (_ IN CASE WHEN existing IS NULL THEN [1] ELSE [] END |
+    CREATE (newZone:Zone {
+      candidateId: $candidateId,
+      clientName: $clientName,
+      demandId: $demandId,
+      rejectedStatus: $status,
+      reason: $reason,
+      rejectedBy: $rejectedBy,
+      rejectedAt: $rejectedAt,
+      expiryDate: $expiryDate,
+      createdAt: $createdAt,
+      updatedAt: $createdAt
+    })
+  )
+
+  RETURN true as success
+`, {
+  candidateId: Number(candidateId),
+  demandId: demandId ? Number(demandId) : null,
+  clientName: String(clientName).trim(),
+  status: String(status).trim(),
+  reason: reason || `Rejected with status: ${status}`,
+rejectedBy: rejectedBy || 'Unknown',
+  rejectedAt: now.toISOString(),
+  expiryDate: expiryDate.toISOString(),
+  createdAt: now.toISOString()
+});
+
+      if (createResult.records.length > 0) {
+        // console.log("✅ Zone entry created/updated successfully!");
+        // console.log("   Candidate ID:", candidateId);
+        // console.log("   Status:", status);
+        // console.log("   Expiry:", expiryDate.toISOString());
+
         res.json({
           success: true,
-          action: 'updated',
-          message: `Zone entry updated for candidate ${candidateId}`
+          action: 'upserted',
+          message: `Zone entry created/updated for candidate ${candidateId}`,
+          data: {
+            candidateId: candidateId,
+            clientName: clientName,
+            rejectedStatus: status,
+            expiryDate: expiryDate.toISOString()
+          }
         });
       } else {
-        // CREATE new entry
-        await session.run(`
-          CREATE (z:Zone {
-            candidateId: $candidateId,
-            demandId: $demandId,
-            clientName: $clientName,
-            rejectedStatus: $status,
-            reason: $reason,
-            rejectedBy: $rejectedBy,
-            rejectedAt: $rejectedAt,
-            expiryDate: $expiryDate,
-            createdAt: $createdAt,
-            updatedAt: $createdAt
-          })
-        `, {
-          candidateId: parseInt(candidateId),
-          demandId: demandId ? parseInt(demandId) : null,
-          clientName: clientName,
-          status: status,
-          reason: reason || `Rejected with status: ${status}`,
-          rejectedBy: rejectedBy || 'Unknown',
-          rejectedAt: now.toISOString(),
-          expiryDate: expiryDate.toISOString(),
-          createdAt: now.toISOString()
-        });
-        
-        res.json({
-          success: true,
-          action: 'created',
-          message: `Zone entry created for candidate ${candidateId}`
-        });
+        console.error("❌ Failed to create zone entry - no records returned");
+        throw new Error("Failed to create zone entry");
       }
-      
+
     } else {
-      // NOT a zone status - DELETE zone entry if exists
-      console.log(`❌ Status "${status}" is NOT a zone status - Deleting zone entry if exists`);
-      
-      const deletedCount = await deleteZoneEntry(candidateId, clientName);
-      
+      console.log("❌ Status is NOT a zone status - Skipping");
       res.json({
         success: true,
-        action: deletedCount > 0 ? 'deleted' : 'none',
-        message: deletedCount > 0 
-          ? `Zone entry deleted for candidate ${candidateId}` 
-          : `No zone entry found for candidate ${candidateId}`
+        action: 'skipped',
+        message: `Status "${status}" is not a zone status`
       });
     }
-    
+
   } catch (err) {
-    console.error("❌ Error managing zone entry:", err);
+    console.error("❌ Error in zone/manage:", err);
+    console.error("Error stack:", err.stack);
     res.status(500).json({
       success: false,
       message: "Failed to manage zone entry",
-      error: err.message
+      error: err.message,
+      stack: err.stack
     });
   } finally {
     await session.close();
@@ -662,22 +664,24 @@ router.post("/manage", async (req, res) => {
  */
 router.get("/history/:candidateId/:clientName", async (req, res) => {
   const { candidateId, clientName } = req.params;
-  
-  console.log(`\n📡 GET /api/zone/history/${candidateId}/${clientName} - Fetching zone history`);
-  
+
+  // console.log(`\n📡 GET /api/zone/history/${candidateId}/${clientName} - Fetching zone history`);
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
-      MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
+      MATCH (z:Zone)
+WHERE toFloat(z.candidateId) = toFloat($candidateId)
+AND toLower(trim(z.clientName)) = toLower(trim($clientName))
       RETURN z
       ORDER BY z.createdAt DESC
     `, {
       candidateId: parseInt(candidateId),
       clientName: clientName
     });
-    
+
     if (result.records.length === 0) {
       return res.json({
         success: true,
@@ -686,13 +690,13 @@ router.get("/history/:candidateId/:clientName", async (req, res) => {
         history: []
       });
     }
-    
+
     const history = result.records.map(record => {
       const z = record.get('z').properties;
       const expiryDate = new Date(z.expiryDate);
       const now = new Date();
       const isExpired = expiryDate <= now;
-      
+
       return {
         candidateId: toNumber(z.candidateId),
         demandId: toNumber(z.demandId),
@@ -708,9 +712,8 @@ router.get("/history/:candidateId/:clientName", async (req, res) => {
         previousRejection: z.previousRejection || null
       };
     });
-    
-    console.log(`📊 Found ${history.length} zone history entries for candidate ${candidateId} with client ${clientName}`);
-    
+
+
     res.json({
       success: true,
       hasHistory: true,
@@ -720,7 +723,7 @@ router.get("/history/:candidateId/:clientName", async (req, res) => {
       count: history.length,
       currentActive: history.find(h => !h.isExpired) ? true : false
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching zone history:", err);
     res.status(500).json({
@@ -739,16 +742,17 @@ router.get("/history/:candidateId/:clientName", async (req, res) => {
  */
 router.get("/check/:candidateId/:clientName", async (req, res) => {
   const { candidateId, clientName } = req.params;
-  
-  console.log(`\n📡 GET /api/zone/check/${candidateId}/${clientName} - Checking zone status`);
-  
+
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     // Convert expiryDate string to datetime for comparison
     const result = await session.run(`
-      MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
+      MATCH (z:Zone)
+WHERE toFloat(z.candidateId) = toFloat($candidateId)
+AND toLower(trim(z.clientName)) = toLower(trim($clientName))
       WHERE datetime(z.expiryDate) > datetime()
       RETURN z
       ORDER BY z.rejectedAt DESC
@@ -757,25 +761,23 @@ router.get("/check/:candidateId/:clientName", async (req, res) => {
       candidateId: parseInt(candidateId),
       clientName: clientName
     });
-    
+
     if (result.records.length === 0) {
-      console.log(`✅ Candidate ${candidateId} is not in zone for client ${clientName}`);
       return res.json({
         success: true,
         inZone: false,
         message: "Candidate is eligible for this client"
       });
     }
-    
+
     const zoneEntry = result.records[0].get('z').properties;
     const expiryDate = zoneEntry.expiryDate;
     const now = new Date();
     const expiry = new Date(expiryDate);
-    
+
     const daysRemaining = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
-    
-    console.log(`⚠️ Candidate ${candidateId} is in zone for client ${clientName} until ${expiryDate}`);
-    
+
+
     res.json({
       success: true,
       inZone: true,
@@ -790,7 +792,7 @@ router.get("/check/:candidateId/:clientName", async (req, res) => {
       },
       message: `Candidate is in zone for ${clientName} for ${daysRemaining} more days`
     });
-    
+
   } catch (err) {
     console.error("❌ Error checking zone status:", err);
     res.status(500).json({
@@ -809,33 +811,34 @@ router.get("/check/:candidateId/:clientName", async (req, res) => {
  */
 router.post("/check-multiple", async (req, res) => {
   const { candidateIds, clientName } = req.body;
-  
-  console.log(`\n📡 POST /api/zone/check-multiple - Checking ${candidateIds?.length || 0} candidates for client: ${clientName}`);
-  
+
+
   if (!candidateIds || !Array.isArray(candidateIds) || candidateIds.length === 0) {
     return res.status(400).json({
       success: false,
       message: "candidateIds array and clientName are required"
     });
   }
-  
+
   if (!clientName) {
     return res.status(400).json({
       success: false,
       message: "clientName is required"
     });
   }
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const results = [];
-    
+
     for (const candidateId of candidateIds) {
       const checkResult = await session.run(`
-        MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
-        WHERE z.expiryDate > datetime()
+        MATCH (z:Zone)
+WHERE toFloat(z.candidateId) = toFloat($candidateId)
+AND toLower(trim(z.clientName)) = toLower(trim($clientName))
+        WHERE datetime(z.expiryDate) > datetime()
         RETURN z
         ORDER BY z.rejectedAt DESC
         LIMIT 1
@@ -843,14 +846,14 @@ router.post("/check-multiple", async (req, res) => {
         candidateId: parseInt(candidateId),
         clientName: clientName
       });
-      
+
       if (checkResult.records.length > 0) {
         const zoneEntry = checkResult.records[0].get('z').properties;
         const expiryDate = zoneEntry.expiryDate;
         const now = new Date();
         const expiry = new Date(expiryDate);
         const daysRemaining = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
-        
+
         results.push({
           candidateId: toNumber(candidateId),
           inZone: true,
@@ -867,10 +870,9 @@ router.post("/check-multiple", async (req, res) => {
         });
       }
     }
-    
+
     const inZoneCount = results.filter(r => r.inZone).length;
-    console.log(`📊 Zone check results: ${inZoneCount}/${candidateIds.length} candidates are in zone`);
-    
+
     res.json({
       success: true,
       clientName: clientName,
@@ -881,7 +883,7 @@ router.post("/check-multiple", async (req, res) => {
         eligible: candidateIds.length - inZoneCount
       }
     });
-    
+
   } catch (err) {
     console.error("❌ Error checking multiple zone status:", err);
     res.status(500).json({
@@ -899,11 +901,10 @@ router.post("/check-multiple", async (req, res) => {
  * Remove expired zone entries (manual cleanup)
  */
 router.delete("/cleanup", async (req, res) => {
-  console.log(`\n📡 DELETE /api/zone/cleanup - Manual cleanup of expired zone entries`);
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     // Find expired entries using datetime conversion
     const findResult = await session.run(`
@@ -911,13 +912,13 @@ router.delete("/cleanup", async (req, res) => {
       WHERE datetime(z.expiryDate) <= datetime()
       RETURN z.candidateId as candidateId, z.clientName as clientName, z.expiryDate as expiryDate
     `);
-    
+
     const expiredEntries = findResult.records.map(record => ({
       candidateId: record.get('candidateId'),
       clientName: record.get('clientName'),
       expiryDate: record.get('expiryDate')
     }));
-    
+
     // Delete expired entries
     const result = await session.run(`
       MATCH (z:Zone)
@@ -925,18 +926,17 @@ router.delete("/cleanup", async (req, res) => {
       DELETE z
       RETURN count(z) as deletedCount
     `);
-    
+
     const deletedCount = toNumber(result.records[0].get('deletedCount'));
-    
-    console.log(`✅ Manual cleanup: Deleted ${deletedCount} expired zone entries`);
-    
+
+
     res.json({
       success: true,
       message: `Cleaned up ${deletedCount} expired zone entries`,
       deletedCount: deletedCount,
       expiredEntries: expiredEntries
     });
-    
+
   } catch (err) {
     console.error("❌ Error cleaning up zone entries:", err);
     res.status(500).json({
@@ -955,26 +955,25 @@ router.delete("/cleanup", async (req, res) => {
  */
 router.get("/list/:clientName", async (req, res) => {
   const { clientName } = req.params;
-  
-  console.log(`\n📡 GET /api/zone/list/${clientName} - Fetching active zone entries`);
-  
+
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
       MATCH (z:Zone {clientName: $clientName})
-      WHERE z.expiryDate > datetime()
+      WHERE datetime(z.expiryDate) > datetime()
       RETURN z
       ORDER BY z.expiryDate ASC
     `, { clientName });
-    
+
     const zoneEntries = result.records.map(record => {
       const z = record.get('z').properties;
       const expiryDate = new Date(z.expiryDate);
       const now = new Date();
       const daysRemaining = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-      
+
       return {
         candidateId: toNumber(z.candidateId),
         demandId: toNumber(z.demandId),
@@ -987,16 +986,15 @@ router.get("/list/:clientName", async (req, res) => {
         daysRemaining: daysRemaining
       };
     });
-    
-    console.log(`📊 Found ${zoneEntries.length} active zone entries for client ${clientName}`);
-    
+
+
     res.json({
       success: true,
       clientName: clientName,
       zoneEntries: zoneEntries,
       count: zoneEntries.length
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching zone entries:", err);
     res.status(500).json({
@@ -1008,8 +1006,53 @@ router.get("/list/:clientName", async (req, res) => {
     await session.close();
   }
 });
+/**
+ * DELETE /api/zone/remove/:candidateId/:clientName
+ * Remove candidate from zone
+ */
+router.delete("/remove/:candidateId/:clientName", async (req, res) => {
+  const { candidateId, clientName } = req.params;
 
-module.exports = router; 
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    const result = await session.run(`
+     MATCH (z:Zone)
+WHERE toFloat(z.candidateId) = toFloat($candidateId)
+AND toLower(trim(z.clientName)) = toLower(trim($clientName))
+
+WITH collect(z) as zones, count(z) as deletedCount
+
+FOREACH (zone IN zones | DELETE zone)
+
+RETURN deletedCount
+    `, {
+      candidateId: Number(candidateId),
+      clientName: String(clientName).trim()
+    });
+
+    const deletedCount = toNumber(result.records[0].get("deletedCount"));
+
+    res.json({
+      success: true,
+      deletedCount,
+      message: `Removed ${deletedCount} zone entries`
+    });
+
+  } catch (err) {
+    console.error("❌ Error removing from zone:", err);
+
+    res.status(500).json({
+      success: false,
+      message: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+module.exports = router;
 module.exports.startAutoCleanup = startAutoCleanup;
 module.exports.stopAutoCleanup = stopAutoCleanup;
 module.exports.autoCleanupExpiredZones = autoCleanupExpiredZones;
