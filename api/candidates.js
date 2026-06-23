@@ -199,9 +199,12 @@ const toNumber = (value) => {
 };
 
 const allowedOrigins = [
-  'http://localhost:5173',
-  'https://myuandwe.vercel.app'
+  "http://localhost:5173",
+  "https://myuandwe.vercel.app",
+  "https://uandwe.com",
+  "https://www.uandwe.com"
 ];
+
 
 router.use((req, res, next) => {
   const origin = req.headers.origin;
