@@ -4,6 +4,7 @@
   // Import the shared driver helper
   const getDriver = require("../lib/neo4j");
 
+
   // Helper function to parse skills
   const parseKeySkills = (skills) => {
     if (!skills) return [];
