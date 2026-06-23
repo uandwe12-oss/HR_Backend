@@ -72,7 +72,7 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: process.env.BASE_URL || "http://localhost:5000"
+        url: process.env.BASE_URL || "https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net"
       }
     ]
   },
@@ -106,11 +106,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Personal details API available at: http://localhost:${PORT}/api/personal-details`);
-});
 
 module.exports = app;
