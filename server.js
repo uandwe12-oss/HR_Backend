@@ -72,7 +72,8 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: "https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net"
+        url: "https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net",
+         description: "Local Development Server"
       }
     ]
   },
