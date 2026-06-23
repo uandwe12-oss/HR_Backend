@@ -12,7 +12,8 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:5173",
   "https://myuandwe.vercel.app",
-  "https://uandwe.com"
+  "https://uandwe.com",
+  "https://www.uandwe.com"
 ];
 
 app.use((req, res, next) => {
