@@ -72,7 +72,7 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: process.env.BASE_URL || "https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net"
+        url:"https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net"
       }
     ]
   },
