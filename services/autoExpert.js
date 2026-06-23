@@ -4,7 +4,7 @@ const axios = require('axios');
 const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
-const { uploadToDrive, authorize, deleteFileFromDrive, listFiles } = require('./googleDrive');
+const { uploadToDrive, authorize, deleteFileFromDrive, listFiles } = require('./googleDrive.js');
 
 let isInitialized = false;
 let isExporting = false;
