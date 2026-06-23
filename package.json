@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "seedUser.js",
   "scripts": {
-   "test": "echo \"Tests passed\""
+   "test": "echo \"Tests passed\"",
     "start": "node server.js"
   },
   "keywords": [],
