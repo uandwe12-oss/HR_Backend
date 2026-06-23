@@ -8,12 +8,12 @@ const { google } = require('googleapis');
 const { Readable } = require('stream');
 const XLSX = require('xlsx');
 // Add this line after your other requires
-const { manualExport } = require('../services/autoExport.js');
+const { manualExport } = require('../services/autoExport');
 require("dotenv").config();
 
 // At the very top of candidates.js, update this line:
 // Update line 13
-const { uploadToDrive, uploadCandidateProfileResume, uploadResume, deleteFileFromDrive } = require('../services/googleDrive.js');// GOOGLE DRIVE CONFIGURATION
+const { uploadToDrive, uploadCandidateProfileResume, uploadResume, deleteFileFromDrive } = require('../services/googleDrive');// GOOGLE DRIVE CONFIGURATION
 // ============================================
 const DRIVE_FOLDER_ID = '1Nehh6KSypnEo77JZqf2gVtkIwYIi8rgp'
 const TOKEN_PATH = path.join(__dirname, '../config/token.json');
@@ -204,7 +204,6 @@ const allowedOrigins = [
   "https://uandwe.com",
   "https://www.uandwe.com"
 ];
-
 
 router.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -727,6 +726,101 @@ router.get("/personal-resume/:fileId", async (req, res) => {
   }
 });
 
+
+/**
+ * GET /api/candidates/by-status
+ * Get all candidates with a specific status from any demand
+ */
+router.get("/by-status", async (req, res) => {
+  const status = req.query.status || 'Joined';
+  const session = driver.session();
+  
+  try {
+    const result = await session.run(`
+      MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile)
+      WHERE r.status = $status
+      RETURN c, d.id as demandId, d.rrNumber as demandRrNumber, r.status as status, r.selectedAt as joinedAt
+      ORDER BY r.updatedAt DESC
+    `, { status });
+    
+    const candidates = [];
+    
+    for (const record of result.records) {
+      const candidateProps = record.get('c').properties;
+      const demandId = record.get('demandId');
+      const demandRrNumber = record.get('demandRrNumber');
+      const joinedAt = record.get('joinedAt');
+      
+      const formatted = formatProfileForResponse(candidateProps);
+      
+      candidates.push({
+        ...formatted,
+        joinedDemandId: demandId ? (demandId.low !== undefined ? demandId.toNumber() : demandId) : null,
+        joinedDemandRrNumber: demandRrNumber || `RR${String(demandId).padStart(3, "0")}`,
+        joinedAt: joinedAt,
+        status: status
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: candidates,
+      totalCount: candidates.length
+    });
+    
+  } catch (err) {
+    console.error("❌ Error fetching candidates by status:", err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch candidates by status",
+      error: err.message 
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * GET /api/candidates/hidden-ids
+ * Get IDs of candidates that should be hidden from recruiters
+ */
+router.get("/hidden-ids", async (req, res) => {
+  const session = driver.session();
+  
+  try {
+    const result = await session.run(`
+      MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile)
+      WHERE r.status IN ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline']
+      RETURN c.Can_ID as canId, c.id as id
+    `);
+    
+    const ids = new Set();
+    for (const record of result.records) {
+      const canId = record.get('canId');
+      const id = record.get('id');
+      if (canId) {
+        ids.add(typeof canId === 'number' ? Math.floor(canId) : parseInt(canId));
+      } else if (id) {
+        ids.add(typeof id === 'number' ? Math.floor(id) : parseInt(id));
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: Array.from(ids)
+    });
+    
+  } catch (err) {
+    console.error("❌ Error fetching hidden candidate IDs:", err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch hidden candidate IDs",
+      error: err.message 
+    });
+  } finally {
+    await session.close();
+  }
+});
 
 /**
  * GET /api/candidates/joined
@@ -1783,7 +1877,7 @@ router.get("/export/status", async (req, res) => {
 router.post("/export/trigger", async (req, res) => {
   
   try {
-    const { manualExport } = require('../services/autoExport.js');
+    const { manualExport } = require('../services/autoExport');
     const result = await manualExport();
     
     res.json(result);
