@@ -8,7 +8,7 @@ const { google } = require('googleapis');
 const { Readable } = require('stream');
 const XLSX = require('xlsx');
 // Add this line after your other requires
-const { manualExport } = require('../services/autoExport');
+const { manualExport } = require('../services/autoExport.js');
 require("dotenv").config();
 
 // At the very top of candidates.js, update this line:
