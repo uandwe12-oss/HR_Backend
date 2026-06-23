@@ -13,7 +13,7 @@ require("dotenv").config();
 
 // At the very top of candidates.js, update this line:
 // Update line 13
-const { uploadToDrive, uploadCandidateProfileResume, uploadResume, deleteFileFromDrive } = require('../services/googleDrive');// GOOGLE DRIVE CONFIGURATION
+const { uploadToDrive, uploadCandidateProfileResume, uploadResume, deleteFileFromDrive } = require('../services/googleDrive.js');// GOOGLE DRIVE CONFIGURATION
 // ============================================
 const DRIVE_FOLDER_ID = '1Nehh6KSypnEo77JZqf2gVtkIwYIi8rgp'
 const TOKEN_PATH = path.join(__dirname, '../config/token.json');
@@ -1780,7 +1780,7 @@ router.get("/export/status", async (req, res) => {
 router.post("/export/trigger", async (req, res) => {
   
   try {
-    const { manualExport } = require('../services/autoExport');
+    const { manualExport } = require('../services/autoExport.js');
     const result = await manualExport();
     
     res.json(result);
