@@ -76,7 +76,7 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url:'https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net'
+        url:'https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net',
         description: "Local Development Server"
       }
     ],
@@ -143,6 +143,19 @@ app.use((err, req, res, next) => {
     message: err.message || "Internal Server Error"
   });
 });
+
+initializeServices()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("❌ Failed to initialize services:", err);
+    process.exit(1);
+  });
+
+module.exports = app;
 
 
 
