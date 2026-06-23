@@ -99,7 +99,7 @@ async function autoExportAndUploadDemand() {
   // console.log('='.repeat(60));
   
   try {
-    const apiUrl = `http://localhost:${process.env.PORT || 5000}`;
+    const apiUrl = 'https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net'
     
     // console.log(`🌐 Fetching demands from: ${apiUrl}/api/demand`);
     const response = await axios.get(`${apiUrl}/api/demand`, {
