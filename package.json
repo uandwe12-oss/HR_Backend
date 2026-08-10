@@ -2,9 +2,9 @@
   "name": "hr_backend",
   "version": "1.0.0",
   "main": "seedUser.js",
- "scripts": {
-  "start": "node server.js"
-}
+  "scripts": {
+    "start": "node server.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
