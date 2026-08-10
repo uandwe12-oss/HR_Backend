@@ -173,8 +173,8 @@ router.put("/:id", async (req, res) => {
   const id = Number(req.params.id);
 
   try {
-    console.log(`🔍 Updating demand ID: ${id}`);
-    console.log("📝 Update data:", req.body);
+    // console.log(`🔍 Updating demand ID: ${id}`);
+    // console.log("📝 Update data:", req.body);
     
     // First, get the current demand to check if status is changing
     const currentDemandResult = await session.run(
@@ -193,13 +193,13 @@ router.put("/:id", async (req, res) => {
       if (currentStatus !== newStatus && 
           (newStatus === "Fulfilled" || newStatus === "Closed" || newStatus === "Cancelled")) {
         updateData.statusChangedDate = new Date().toISOString().split('T')[0];
-        console.log(`📅 Status changed to ${newStatus} - setting end date: ${updateData.statusChangedDate}`);
+        // console.log(`📅 Status changed to ${newStatus} - setting end date: ${updateData.statusChangedDate}`);
       }
       
       // If status is changing back to Active, clear the end date
       if (currentStatus !== newStatus && newStatus === "Active") {
         updateData.statusChangedDate = "";
-        console.log(`📅 Status changed back to Active - clearing end date`);
+        // console.log(`📅 Status changed back to Active - clearing end date`);
       }
     }
     
@@ -211,7 +211,7 @@ router.put("/:id", async (req, res) => {
     );
 
     if (!result.records.length) {
-      console.log(`❌ Demand with ID ${id} not found for update`);
+      // console.log(`❌ Demand with ID ${id} not found for update`);
       return res.status(404).json({ message: "Demand not found" });
     }
 
