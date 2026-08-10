@@ -2,11 +2,25 @@ require("dotenv").config();
 const express = require("express");
 const swaggerUi = require("swagger-ui-express");
 const swaggerJsdoc = require("swagger-jsdoc");
+const path = require('path');
+const fs = require('fs');
+const { startAutoExportScheduler, initAutoExport } = require('./services/autoExport');
+const { startDemandAutoExportScheduler } = require('./services/autoExportDemand');
+const { startAutoCancelAssetReleaseScheduler } = require('./services/autoCancelAssetRelease');
 
 const app = express();
+const PORT = process.env.PORT || 5000;
+
+async function initializeServices() {
+  console.log('\n🔧 Initializing services...');
+  await initAutoExport();
+  startAutoExportScheduler();
+  startDemandAutoExportScheduler();
+  startAutoCancelAssetReleaseScheduler();
+}
 
 /* ================================
-   CORS CONFIG (VERCEL SAFE)
+   CORS CONFIG
 ================================ */
 
 const allowedOrigins = [
@@ -15,22 +29,22 @@ const allowedOrigins = [
   "https://uandwe.com",
   "https://www.uandwe.com"
 ];
-
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
-
   res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,HEAD");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Company-Id");
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
+  const company = req.headers['x-company-id'] || 'default';
+  req.company = company;
+  if (req.method !== 'OPTIONS') {
 
+  }
   next();
 });
 
@@ -40,6 +54,52 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.use((req, res, next) => {
+  res.locals.company = req.company;
+  next();
+});
+
+
+
+/* ================================
+   SWAGGER CONFIG - COMPLETE FIX
+================================ */
+
+// Force localhost only - NO Azure URL
+const swaggerOptions = {
+  definition: {
+    openapi: "3.0.0",
+    info: {
+      title: "HR Backend API",
+      version: "1.0.0",
+      description: "Local Development API Documentation",
+    },
+    servers: [
+      {
+        url: `https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net`,
+        description: "Local Development Server"
+      }
+    ],
+  },
+  apis: ["./api/*.js"]
+};
+
+let swaggerSpec;
+try {
+  swaggerSpec = swaggerJsdoc(swaggerOptions);
+  console.log(`✅ Swagger initialized with ${Object.keys(swaggerSpec.paths || {}).length} endpoints`);
+} catch (error) {
+  console.error("❌ Swagger initialization error:", error);
+  swaggerSpec = { openapi: "3.0.0", info: { title: "API", version: "1.0.0" }, paths: {} };
+}
+
+
+
+
+
+// Debug endpoint
+
 
 /* ================================
    ROUTES
@@ -57,31 +117,20 @@ app.use("/api/zone", require("./api/zone"));
 app.use("/api/holiday", require("./api/holiday"));
 app.use('/api/personal-details', require("./api/personalDetails"));
 app.use("/api/visa", require("./api/visa"));
-
-/* ================================
-   SWAGGER CONFIG
-================================ */
-
-const swaggerOptions = {
-  definition: {
-    openapi: "3.0.0",
-    info: {
-      title: "HR Backend API",
-      version: "1.0.0",
-      description: "API documentation"
-    },
-    servers: [
-      {
-        url: "https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net",
-         description: "Local Development Server"
-      }
-    ]
-  },
-  apis: ["./api/*.js"]
-};
-
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.use("/api/policy", require("./api/policy"));
+app.use('/api/profile-approval', require("./api/profileApproval"));
+app.use('/api/salary-advance', require('./api/salaryAdvance'));
+app.use("/api/insurance-policies", require('./api/Insurance'));
+app.use("/api/employeeassets", require("./api/employeeassets"));
+app.use("/api/birthday", require("./api/birthdayWishes"));
+app.use("/api/reimbursements", require("./api/reimbursement"));
+app.use("/api/leave", require("./api/leave"));
+app.use("/api/payroll", require("./api/payroll"));
+app.use("/api/teams", require("./api/teams"));
+app.use("/api/notifications", require("./api/notifications"));
+app.use("/api/allocations", require("./api/allocations"));
+app.use("/api/timesheet", require("./api/timesheet"));
+app.use("/api/news", require("./api/news"));
 
 /* ================================
    TEST ROUTE
@@ -91,7 +140,9 @@ app.get("/api/test", (req, res) => {
   res.json({
     success: true,
     message: "Server is running",
-    time: new Date()
+    time: new Date(),
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -107,13 +158,30 @@ app.use((err, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
 
 
+/* ================================
+START SERVER
+================================ */
 
+async function startServer() {
+  try {
+    await initializeServices();
+
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`✅ All services initialized successfully!\n`);
+    });
+
+  } catch (error) {
+    console.error("❌ Failed to initialize services:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
 
 module.exports = app;
+
+
+
