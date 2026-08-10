@@ -131,36 +131,7 @@ const getCandidatesInZone = async (clientName) => {
 
 };
 
-router.use((req, res, next) => {
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://myuandwe.vercel.app",
-  "https://uandwe.com",
-  "https://www.uandwe.com"
-];
 
-  const origin = req.headers.origin;
-
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-
-  res.header('Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-
-  res.header('Access-Control-Allow-Methods', 'GET, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Credentials', 'true');
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-
-  next();
-});
-
-router.use((req, res, next) => {
-  next();
-});
 
 // Extract skills array from profile
 const extractSkillsArray = (skills) => {
