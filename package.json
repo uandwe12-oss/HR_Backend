@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "seedUser.js",
   "scripts": {
-   "test": "echo \"Tests passed\"",
+    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js"
   },
   "keywords": [],
@@ -21,6 +21,7 @@
     "multer": "^2.0.2",
     "neo4j-driver": "^5.28.3",
     "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.8",
     "pdf-compressor": "^1.0.5",
     "pdf-lib": "^1.17.1",
     "pdf-poppler": "^0.2.3",
