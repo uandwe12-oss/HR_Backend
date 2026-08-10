@@ -23,7 +23,13 @@ const HEALTH_CARD_FOLDER_ID = '1vRQBgV6pMuXdVcVKzqCRJgMQ5L60GzYm'; // For Health
 const EMPLOYEE_TRANSFER_FOLDER_ID = '1RQU_k8ie5yRsYFOIPX997ItIBbwAPpJ2'; // For Relieving Letters
 const REIMBURSEMENT_FOLDER_ID = '1RQU_k8ie5yRsYFOIPX997ItIBbwAPpJ2'; // For Reimbursement Documents
 const PAYSLIP_FOLDER_ID = '10Gp5wXt-x_wGKGiJ_8KbIRuFN9CwNfgh'; // For Employee Payslips
+const NATIONAL_ID_FOLDER_ID = '19tRkAmK8ZPgyvFla8felhozyebw48zRv'; // For China National ID
 
+const RELIEVING_LETTER_1_FOLDER_ID = '1uRcgItvzQKrcteSkBzBL95vXAfgevVmU'; // For Relieving Letter 1
+const RELIEVING_LETTER_2_FOLDER_ID = '1NcWNyP5Uiu3DpGKKD-L9Z-TDLyCVPpkR'; // For Relieving Letter 2
+const PF_PASSBOOK_FOLDER_ID = '1F8V1dPTag5Utrj4vUHFZj5g0_kYxJCJZ'; // For PF Passbook Screenshots
+const TIMESHEET_FOLDER_ID = '1p4yAZEn-lNy9yRpY2HVPRbKV3odr0TQb'; // For Timesheet images and documents
+const ASSET_RELEASE_FOLDER_ID = '1W3esDZCc5JVlSNpFH6g3oE8Tati5CUGI'; // For Asset Release Images
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
@@ -49,7 +55,7 @@ async function authorize() {
       return auth;
     }
     else if (credentials.installed || credentials.web) {
-      console.log('👤 Using OAuth2 authentication');
+      // console.log('👤 Using OAuth2 authentication');
 
       const { client_secret, client_id, redirect_uris } = credentials.installed || credentials.web;
       const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
@@ -189,6 +195,14 @@ async function uploadCandidateProfileResume(filePath, fileName) {
     return { success: false, error: error.message };
   }
 }
+
+/**
+ * Upload National ID document to National ID specific folder
+ */
+async function uploadNationalIdDocument(fileBuffer, originalName, mimeType, userId) {
+  return await uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'national_id', NATIONAL_ID_FOLDER_ID);
+}
+
 /**
  * Upload PAN card image to PAN-specific folder
  */
@@ -431,12 +445,36 @@ async function uploadRelievingLetter(fileBuffer, originalName, mimeType, userId)
   return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'relieving_letter', EMPLOYEE_TRANSFER_FOLDER_ID);
 }
 
+async function uploadRelievingLetter1(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'relieving_letter_1', RELIEVING_LETTER_1_FOLDER_ID);
+}
+
+async function uploadRelievingLetter2(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'relieving_letter_2', RELIEVING_LETTER_2_FOLDER_ID);
+}
+
+async function uploadPfPassbook(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'pf_passbook', PF_PASSBOOK_FOLDER_ID);
+}
+
 async function uploadReimbursementDocument(fileBuffer, originalName, mimeType, userId) {
   return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'reimbursement_document', REIMBURSEMENT_FOLDER_ID);
 }
 
 async function uploadPayslip(fileBuffer, originalName, mimeType, userId) {
   return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'payslip', PAYSLIP_FOLDER_ID);
+}
+
+async function uploadNewsImage(fileBuffer, originalName, mimeType, userId = 'news') {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'news_banner', TIMESHEET_FOLDER_ID);
+}
+
+async function uploadNewsAttachment(fileBuffer, originalName, mimeType, userId = 'news') {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'news_attachment', TIMESHEET_FOLDER_ID);
+}
+
+async function uploadAssetReleaseImage(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'asset_release', ASSET_RELEASE_FOLDER_ID);
 }
 
 // ============ EXISTING FUNCTIONS (Preserved) ============
@@ -623,6 +661,13 @@ module.exports = {
   uploadPostGraduationCertificate,
   uploadHealthCard,
   uploadRelievingLetter,
+  uploadRelievingLetter1,
+  uploadRelievingLetter2,
+  uploadPfPassbook,
   uploadReimbursementDocument,
-  uploadPayslip
+  uploadPayslip,
+  uploadNationalIdDocument,
+  uploadNewsImage,
+  uploadNewsAttachment,
+  uploadAssetReleaseImage
 };
