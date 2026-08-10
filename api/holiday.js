@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const getDriver = require("../lib/neo4j");
 
-console.log("✅ HOLIDAY ROUTES FILE LOADED SUCCESSFULLY");
 
 // Test route
 router.get("/ping", (req, res) => {
@@ -35,7 +34,11 @@ router.get("/groups", async (req, res) => {
 
 // Get holidays by group name
 router.get("/group/:groupName", async (req, res) => {
-  const { groupName } = req.params;
+  let { groupName } = req.params;
+  const normalized = groupName.toLowerCase().replace(/\s+/g, '');
+  if (normalized === 'bangaloreuandwelabs' || normalized === 'bangaloreuandwe' || normalized === 'uandwebangalore') {
+    groupName = 'BangaloreUANDWE';
+  }
   const driver = getDriver();
   const session = driver.session();
   try {
@@ -61,6 +64,167 @@ router.get("/group/:groupName", async (req, res) => {
   }
 });
 
+// Add these to your holidayRoutes.js file
+
+// GET /api/holiday/companies - Get all companies/groups for dropdown
+// GET /api/holiday/companies - Get all companies/groups filtered by client
+router.get("/companies", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { client } = req.query; // Get client from query parameter
+
+  if (!driver) {
+    console.error("❌ Neo4j driver not available");
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  try {
+
+    let result;
+    if (client) {
+      // Filter by client
+      result = await session.run(`
+        MATCH (g:Group)
+        WHERE g.client = $client
+        RETURN DISTINCT 
+          g.name AS name, 
+          g.location AS location, 
+          g.client AS client, 
+          g.country AS country,
+          g.id AS id
+        ORDER BY g.name
+      `, { client });
+    } else {
+      // Get all companies
+      result = await session.run(`
+        MATCH (g:Group)
+        RETURN DISTINCT 
+          g.name AS name, 
+          g.location AS location, 
+          g.client AS client, 
+          g.country AS country,
+          g.id AS id
+        ORDER BY g.name
+      `);
+    }
+
+    const companies = result.records.map(record => ({
+      name: record.get("name"),
+      location: record.get("location") || "",
+      client: record.get("client") || "",
+      country: record.get("country") || "",
+      id: record.get("id") || record.get("name")
+    }));
+
+    // Ensure required companies are present for dropdown
+    const requiredCompanies = ["BangaloreUANDWE", "BangaloreUANDWELabs"];
+    requiredCompanies.forEach(reqCompany => {
+      if (!companies.some(c => c.name.toLowerCase() === reqCompany.toLowerCase())) {
+        companies.push({
+          name: reqCompany,
+          location: "Bangalore",
+          client: "UANDWE",
+          country: "India",
+          id: reqCompany
+        });
+      }
+    });
+
+    companies.sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ success: true, data: companies });
+
+  } catch (err) {
+    console.error("❌ Error fetching companies:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// Alternative endpoint for backward compatibility
+router.get("/companies/list", async (req, res) => {
+  // Redirect to the main endpoint or handle directly
+  const driver = getDriver();
+  const session = driver.session();
+
+  if (!driver) {
+    console.error("❌ Neo4j driver not available");
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  try {
+
+    const result = await session.run(`
+      MATCH (g:Group)
+      RETURN DISTINCT 
+        g.name AS name, 
+        g.location AS location, 
+        g.client AS client
+      ORDER BY g.name
+    `);
+
+    const companies = result.records.map(record => ({
+      name: record.get("name"),
+      location: record.get("location") || "",
+      client: record.get("client") || ""
+    }));
+
+    // Ensure required companies are present for dropdown
+    const requiredCompanies = ["BangaloreUANDWE", "BangaloreUANDWELabs"];
+    requiredCompanies.forEach(reqCompany => {
+      if (!companies.some(c => c.name.toLowerCase() === reqCompany.toLowerCase())) {
+        companies.push({
+          name: reqCompany,
+          location: "Bangalore",
+          client: "UANDWE"
+        });
+      }
+    });
+
+    companies.sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ success: true, data: companies });
+
+  } catch (err) {
+    console.error("❌ Error fetching companies:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// Get holiday groups (same as companies)
+router.get("/groups/list", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  try {
+    const result = await session.run(`
+      MATCH (g:Group)
+      RETURN g.name AS name, g.location AS location, g.client AS client, g.country AS country
+      ORDER BY g.name
+    `);
+
+    const groups = result.records.map(record => ({
+      name: record.get("name"),
+      location: record.get("location"),
+      client: record.get("client"),
+      country: record.get("country")
+    }));
+
+    res.json({ success: true, data: groups });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    await session.close();
+  }
+});
+
 // Get upcoming holidays
 router.get("/upcoming", async (req, res) => {
   const { groupName } = req.query;
@@ -69,13 +233,18 @@ router.get("/upcoming", async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
   try {
     let result;
-    if (groupName) {
+    let searchGroup = groupName;
+    if (searchGroup) {
+      const normalized = searchGroup.toLowerCase().replace(/\s+/g, '');
+      if (normalized === 'bangaloreuandwelabs' || normalized === 'bangaloreuandwe' || normalized === 'uandwebangalore') {
+        searchGroup = 'BangaloreUANDWE';
+      }
       result = await session.run(
-        `MATCH (g:Group {name: $groupName})-[:HAS_HOLIDAY]->(h:Holiday)
+        `MATCH (g:Group {name: $searchGroup})-[:HAS_HOLIDAY]->(h:Holiday)
          WHERE h.date >= $today
          RETURN h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type
          ORDER BY h.date LIMIT 10`,
-        { groupName, today }
+        { searchGroup, today }
       );
     } else {
       result = await session.run(
@@ -146,7 +315,13 @@ router.get("/all", async (req, res) => {
 
 // Add new holiday
 router.post("/add", async (req, res) => {
-  const { name, date, day, type, notes, groupName } = req.body;
+  let { name, date, day, type, notes, groupName } = req.body;
+  if (groupName) {
+    const normalized = groupName.toLowerCase().replace(/\s+/g, '');
+    if (normalized === 'bangaloreuandwelabs' || normalized === 'bangaloreuandwe' || normalized === 'uandwebangalore') {
+      groupName = 'BangaloreUANDWE';
+    }
+  }
   const driver = getDriver();
   const session = driver.session();
   try {
@@ -157,7 +332,6 @@ router.post("/add", async (req, res) => {
        CREATE (g)-[:HAS_HOLIDAY]->(h)`,
       { groupName, id: holidayId, name, date, day, type, notes: notes || "" }
     );
-    console.log(`✅ Holiday "${name}" added for ${groupName} with id ${holidayId}`);
     res.json({ success: true, message: "Holiday added successfully", data: { id: holidayId, name } });
   } catch (err) {
     console.error("❌ Error adding holiday:", err.message);
@@ -170,7 +344,13 @@ router.post("/add", async (req, res) => {
 // Update holiday
 router.put("/:holidayId", async (req, res) => {
   const { holidayId } = req.params;
-  const { name, date, day, type, notes, groupName } = req.body;
+  let { name, date, day, type, notes, groupName } = req.body;
+  if (groupName) {
+    const normalized = groupName.toLowerCase().replace(/\s+/g, '');
+    if (normalized === 'bangaloreuandwelabs' || normalized === 'bangaloreuandwe' || normalized === 'uandwebangalore') {
+      groupName = 'BangaloreUANDWE';
+    }
+  }
   const driver = getDriver();
   const session = driver.session();
   try {
@@ -183,7 +363,6 @@ router.put("/:holidayId", async (req, res) => {
     if (result.records.length === 0) {
       return res.status(404).json({ success: false, message: "Holiday not found" });
     }
-    console.log(`✅ Holiday "${name}" updated successfully`);
     res.json({ success: true, message: "Holiday updated successfully" });
   } catch (err) {
     console.error("❌ Error updating holiday:", err.message);
@@ -198,7 +377,6 @@ router.delete("/:holidayId", async (req, res) => {
   const { holidayId } = req.params;
   const driver = getDriver();
 
-  console.log(`\n📡 DELETE /api/holiday/${holidayId} - Deleting holiday`);
 
   // Session 1: find the node
   const findSession = driver.session();
@@ -226,7 +404,6 @@ router.delete("/:holidayId", async (req, res) => {
       `MATCH (h:Holiday {id: $holidayId}) DETACH DELETE h`,
       { holidayId }
     );
-    console.log(`✅ Deleted holiday: "${holidayName}" (${holidayId})`);
     res.json({ success: true, message: `Holiday "${holidayName}" deleted successfully` });
   } catch (err) {
     console.error("❌ Error deleting holiday:", err.message);
