@@ -18,7 +18,6 @@ router.post("/", async (req, res) => {
   const session = driver.session();
   
   try {
-    console.log(`\n📡 POST /api/login - Login attempt for user: ${username}`);
     
 const result = await session.run(
   `MATCH (u:User {username: $username}) 
@@ -32,7 +31,7 @@ const result = await session.run(
 
     // Check if user exists
     if (result.records.length === 0) {
-      console.log(`❌ Login failed: User ${username} not found`);
+      // console.log(`❌ Login failed: User ${username} not found`);
       return res.status(401).json({ 
         success: false,
         message: "Invalid credentials" 
@@ -57,8 +56,7 @@ const result = await session.run(
     const userName = record.get("name") || username;
 
     // Login successful
-    console.log(`✅ Login successful for user: ${username} (Role: ${record.get("role")})`);
-    console.log(`   Display name: ${userName}`);
+    // console.log(`✅ Login successful for user: ${username} (Role: ${record.get("role")})`);
     
 res.json({
   success: true,
