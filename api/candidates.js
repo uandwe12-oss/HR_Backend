@@ -8,12 +8,12 @@ const { google } = require('googleapis');
 const { Readable } = require('stream');
 const XLSX = require('xlsx');
 // Add this line after your other requires
-const { manualExport } = require('../services/autoExport.js');
+const { manualExport } = require('../services/autoExport');
 require("dotenv").config();
 
 // At the very top of candidates.js, update this line:
 // Update line 13
-const { uploadToDrive, uploadCandidateProfileResume, uploadResume, deleteFileFromDrive } = require('../services/googleDrive.js');// GOOGLE DRIVE CONFIGURATION
+const { uploadToDrive, uploadCandidateProfileResume, uploadResume, deleteFileFromDrive } = require('../services/googleDrive');// GOOGLE DRIVE CONFIGURATION
 // ============================================
 const DRIVE_FOLDER_ID = '1Nehh6KSypnEo77JZqf2gVtkIwYIi8rgp'
 const TOKEN_PATH = path.join(__dirname, '../config/token.json');
@@ -71,28 +71,28 @@ async function authorize() {
 const uploadToGoogleDrive = async (file, candidateName) => {
   try {
     console.log('📤 Uploading to Google Drive via shared service...');
-    
+
     // Create temp file from buffer
     const tempDir = path.join(__dirname, '../temp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
-    
+
     const tempFilePath = path.join(tempDir, `${Date.now()}_${file.originalname}`);
     fs.writeFileSync(tempFilePath, file.buffer);
-    
+
     const sanitizedName = candidateName.replace(/[^a-zA-Z0-9]/g, '_');
     const timestamp = Date.now();
     const fileName = `${sanitizedName}_${timestamp}_${file.originalname}`;
-    
+
     // ✅ Use the Candidate Profile specific function
     const result = await uploadCandidateProfileResume(tempFilePath, fileName);
-    
+
     // Clean up temp file
     try {
       fs.unlinkSync(tempFilePath);
-    } catch(e) {}
-    
+    } catch (e) { }
+
     if (result && result.success) {
       return {
         googleDriveFileId: result.fileId,
@@ -102,7 +102,7 @@ const uploadToGoogleDrive = async (file, candidateName) => {
         fileSize: file.size
       };
     }
-    
+
     return null;
   } catch (error) {
     console.error('❌ Google Drive upload error:', error);
@@ -113,22 +113,22 @@ const uploadToGoogleDrive = async (file, candidateName) => {
 const saveFileLocally = (file, candidateName) => {
   try {
     console.log('📁 Saving file locally as fallback...');
-    
+
     // Define upload directory
     const uploadDir = path.join(__dirname, '../uploads');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
-    
+
     const timestamp = Date.now();
     const uniqueSuffix = timestamp + '-' + Math.round(Math.random() * 1E9);
     const ext = path.extname(file.originalname);
     const filename = 'resume-' + uniqueSuffix + ext;
     const filePath = path.join(uploadDir, filename);
-    
+
     fs.writeFileSync(filePath, file.buffer);
     console.log('✅ File saved locally at:', filePath);
-    
+
     return {
       resumePath: `/uploads/${filename}`,
       fileName: filename,
@@ -152,9 +152,9 @@ try {
   const uri = process.env.NEO4J_URI || 'neo4j+s://48046602.databases.neo4j.io';
   const user = process.env.NEO4J_USER || 'neo4j';
   const password = process.env.NEO4J_PASSWORD || '5CFMv9N5rc4lJgSnXJm68eYpRw4DynDCov-0Fyy3m1Q';
-  
+
   console.log(`📡 Connecting to Neo4j at: ${uri}`);
-  
+
   driver = neo4j.driver(
     uri,
     neo4j.auth.basic(user, password),
@@ -198,62 +198,26 @@ const toNumber = (value) => {
   return value;
 };
 
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://myuandwe.vercel.app",
-  "https://uandwe.com",
-  "https://www.uandwe.com"
-];
 
-router.use((req, res, next) => {
-  const origin = req.headers.origin;
-
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-
-  res.header(
-    'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization'
-  );
-
-  res.header(
-    'Access-Control-Allow-Methods',
-    'GET, POST, PUT, DELETE, OPTIONS'
-  );
-
-  res.header('Access-Control-Allow-Credentials', 'true');
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-
-  next();
-});
-
-router.use((req, res, next) => {
-
-  next();
-});
 
 const extractSkillsArray = (skills) => {
   if (!skills) {
     return [];
   }
-  
+
   // If it's already an array
   if (Array.isArray(skills)) {
     // Filter out empty strings and trim
     const cleaned = skills.filter(s => s && typeof s === 'string' && s.trim());
     return cleaned;
   }
-  
+
   // If it's a string
   if (typeof skills === 'string') {
     // Try to parse as JSON first
     try {
       const parsed = JSON.parse(skills);
-      
+
       if (Array.isArray(parsed)) {
         const cleaned = parsed.filter(s => s && typeof s === 'string' && s.trim());
         return cleaned;
@@ -270,29 +234,29 @@ const extractSkillsArray = (skills) => {
     } catch (e) {
       // Not JSON, fall through to regular string processing
     }
-    
+
     // Check if it contains commas (multiple skills)
     if (skills.includes(',')) {
       const split = skills.split(',').map(s => s.trim()).filter(s => s);
       return split;
     }
-    
+
     // Single skill
     const trimmed = skills.trim();
     if (trimmed) {
       return [trimmed];
     }
-    
+
     return [];
   }
-  
+
   // If it's an object (like from Neo4j)
   if (typeof skills === 'object' && skills !== null) {
     // Check if it has a 'skills' property
     if (skills.skills) {
       return extractSkillsArray(skills.skills);
     }
-    
+
     // Check if it's array-like (has length)
     if (skills.length !== undefined) {
       const result = [];
@@ -309,22 +273,22 @@ const extractSkillsArray = (skills) => {
       }
       return result;
     }
-    
+
     // Get all string values from the object
     const values = Object.values(skills).filter(v => v && typeof v === 'string');
     return values;
   }
-  
+
   return [];
 };
 
 // Parse experience string to number (in years)
 const parseExperience = (expString) => {
   if (!expString) return 0;
-  
+
   // If it's already a number
   if (typeof expString === 'number') return expString;
-  
+
   // Try to extract number from string (e.g., "5 years", "3.5 yrs", "2")
   const match = expString.toString().match(/(\d+(\.\d+)?)/);
   return match ? parseFloat(match[0]) : 0;
@@ -332,10 +296,10 @@ const parseExperience = (expString) => {
 
 const normalizeProfileFields = (profile) => {
   const normalized = {};
-  
+
   for (const [key, value] of Object.entries(profile)) {
     const lowerKey = key.toLowerCase().replace(/\s+/g, '');
-    
+
     if (key === 'Candidate Name' || key === 'candidateName' || key === 'name') {
       normalized.name = value;
     } else if (key === 'Email' || key === 'email') {
@@ -403,7 +367,7 @@ const normalizeProfileFields = (profile) => {
       normalized[key] = value;
     }
   }
-  
+
   // Ensure canId and id are set if they weren't found
   if (!normalized.canId && profile.Can_ID) {
     let rawCanId = profile.Can_ID;
@@ -415,15 +379,15 @@ const normalizeProfileFields = (profile) => {
     normalized.canId = rawCanId;
     normalized.id = rawCanId;
   }
-  
+
   return normalized;
 };
 
 const formatProfileForResponse = (profile) => {
 
-  
+
   const normalized = normalizeProfileFields(profile);
-  
+
   // CRITICAL: Ensure canId is properly set from the original Can_ID
   // The normalizeProfileFields function should have set normalized.canId
   if (!normalized.canId && profile.Can_ID) {
@@ -431,32 +395,32 @@ const formatProfileForResponse = (profile) => {
     const rawCanId = profile.Can_ID;
     normalized.canId = typeof rawCanId === 'number' ? Math.floor(rawCanId) : parseInt(rawCanId);
   }
-  
+
   // Also set id to match canId for frontend
   if (normalized.canId && !normalized.id) {
     normalized.id = normalized.canId;
   }
-  
+
   // Ensure id is integer
   if (normalized.id) {
     normalized.id = typeof normalized.id === 'number' ? Math.floor(normalized.id) : parseInt(normalized.id);
   }
-  
+
   if (normalized.canId) {
     normalized.canId = typeof normalized.canId === 'number' ? Math.floor(normalized.canId) : parseInt(normalized.canId);
   }
-  
+
   // Extract skills with improved function
   const rawSkills = profile['Key Skills'] || profile.keySkills || profile.skills || [];
 
-  
-  normalized.keySkills = extractSkillsArray(rawSkills);
-  
 
-  
+  normalized.keySkills = extractSkillsArray(rawSkills);
+
+
+
   // Add isInProgress flag
   normalized.isInProgress = profile.isInProgress || false;
-  
+
   return normalized;
 };
 
@@ -469,25 +433,25 @@ const formatProfileForResponse = (profile) => {
 
 
 router.get("/", async (req, res) => {
-  
+
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 4;
   const skip = (page - 1) * limit;
-  
+
   const session = driver.session();
-  
+
   try {
     // Get total count
     const countResult = await session.run("MATCH (c:Candidate_Profile) RETURN count(c) as total");
     const totalCount = toNumber(countResult.records[0].get('total'));
-    
+
     // Get paginated results
     const result = await session.run(
       "MATCH (c:Candidate_Profile) RETURN c ORDER BY c.Can_ID DESC SKIP $skip LIMIT $limit",
       { skip: neo4j.int(skip), limit: neo4j.int(limit) }
     );
 
-    
+
     const profiles = result.records.map(r => {
       const profile = r.get("c").properties;
       return formatProfileForResponse(profile);
@@ -503,10 +467,10 @@ router.get("/", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error fetching candidate profiles:", err.message);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to fetch candidate profiles",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -514,7 +478,6 @@ router.get("/", async (req, res) => {
 });
 
 router.get("/all", async (req, res) => {
-
   if (!driver) {
     console.error("❌ Driver is not initialized");
     return res.status(500).json({
@@ -524,32 +487,80 @@ router.get("/all", async (req, res) => {
   }
 
   const session = driver.session();
+  const page = req.query.page ? parseInt(req.query.page) : null;
+  const limit = req.query.limit ? parseInt(req.query.limit) : null;
 
   try {
-    const result = await session.run(
-      "MATCH (c:Candidate_Profile) RETURN c ORDER BY c.Can_ID DESC"
-    );
-
-    const profiles = [];
+    let profiles = [];
+    let totalRecords = 0;
     
-    for (const record of result.records) {
-      try {
-        if (!record.get("c")) continue;
-        const profile = formatProfileForResponse(record.get("c").properties);
-        profiles.push(profile);
-      } catch (err) {
-        console.error("Error processing candidate:", err);
-        // Continue with next candidate
-        continue;
+    if (page && limit) {
+      const skip = (page - 1) * limit;
+      
+      // Get total count (excluding joined candidates)
+      const countResult = await session.run(`
+        MATCH (c:Candidate_Profile)
+        WHERE NOT EXISTS {
+          MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c)
+          WHERE r.status = 'Joined'
+        }
+        RETURN count(c) as total
+      `);
+      totalRecords = toNumber(countResult.records[0].get('total'));
+
+      const result = await session.run(
+        `MATCH (c:Candidate_Profile) 
+         WHERE NOT EXISTS {
+           MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c)
+           WHERE r.status = 'Joined'
+         }
+         RETURN c ORDER BY c.Can_ID DESC SKIP $skip LIMIT $limit`,
+        { skip: neo4j.int(skip), limit: neo4j.int(limit) }
+      );
+
+      for (const record of result.records) {
+        try {
+          if (!record.get("c")) continue;
+          profiles.push(formatProfileForResponse(record.get("c").properties));
+        } catch (err) {
+          console.error("Error processing candidate:", err);
+        }
       }
+
+      res.json({
+        success: true,
+        data: profiles,
+        count: profiles.length,
+        totalRecords,
+        currentPage: page,
+        totalPages: Math.ceil(totalRecords / limit)
+      });
+    } else {
+      // Original behavior for backward compatibility (e.g., export)
+      const result = await session.run(`
+        MATCH (c:Candidate_Profile) 
+        WHERE NOT EXISTS {
+          MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c)
+          WHERE r.status = 'Joined'
+        }
+        RETURN c ORDER BY c.Can_ID DESC
+      `);
+      
+      for (const record of result.records) {
+        try {
+          if (!record.get("c")) continue;
+          profiles.push(formatProfileForResponse(record.get("c").properties));
+        } catch (err) {
+          console.error("Error processing candidate:", err);
+        }
+      }
+
+      res.json({
+        success: true,
+        data: profiles,
+        count: profiles.length
+      });
     }
-
-    res.json({
-      success: true,
-      data: profiles,
-      count: profiles.length
-    });
-
   } catch (err) {
     console.error("❌ FULL ERROR:", err);
     res.status(500).json({
@@ -563,20 +574,20 @@ router.get("/all", async (req, res) => {
 });
 
 router.get("/next-id", async (req, res) => {
-  
+
   const session = driver.session();
-  
+
   try {
     // FIXED: Use the correct property name 'Can_ID'
     const result = await session.run(
       "MATCH (c:Candidate_Profile) RETURN max(c.Can_ID) as maxCanId"
     );
-    
+
     const maxCanId = toNumber(result.records[0].get('maxCanId')) || 0;
     const nextCanId = maxCanId + 1;
-    
 
-    
+
+
     res.json({
       success: true,
       nextCanId: nextCanId,
@@ -584,10 +595,10 @@ router.get("/next-id", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error getting next ID:", err.message);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to get next ID",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -625,10 +636,10 @@ router.get("/check-email/:email", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error checking email:", err.message);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to check email",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -666,10 +677,10 @@ router.get("/check-mobile/:mobile", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error checking mobile:", err.message);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to check mobile",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -686,25 +697,25 @@ router.get("/check-mobile/:mobile", async (req, res) => {
  */
 router.get("/personal-resume/:fileId", async (req, res) => {
   const { fileId } = req.params;
-  
+
   try {
     const { getDriveService } = require('../services/googleDrive');
     const drive = await getDriveService();
-    
+
     // Get file metadata to verify it exists and get download link
     const file = await drive.files.get({
       fileId: fileId,
       fields: 'id,name,mimeType,webViewLink',
       supportsAllDrives: true
     });
-    
+
     if (!file.data) {
       return res.status(404).json({
         success: false,
         message: "Resume not found"
       });
     }
-    
+
     // Return the view link so frontend can display the PDF
     res.json({
       success: true,
@@ -715,7 +726,7 @@ router.get("/personal-resume/:fileId", async (req, res) => {
         downloadLink: `https://drive.google.com/uc?export=download&id=${file.data.id}`
       }
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching personal resume:", err);
     res.status(500).json({
@@ -734,25 +745,25 @@ router.get("/personal-resume/:fileId", async (req, res) => {
 router.get("/by-status", async (req, res) => {
   const status = req.query.status || 'Joined';
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
       MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile)
-      WHERE r.status = $status
+      WHERE toLower(trim(r.status)) = toLower(trim($status))
       RETURN c, d.id as demandId, d.rrNumber as demandRrNumber, r.status as status, r.selectedAt as joinedAt
       ORDER BY r.updatedAt DESC
     `, { status });
-    
+
     const candidates = [];
-    
+
     for (const record of result.records) {
       const candidateProps = record.get('c').properties;
       const demandId = record.get('demandId');
       const demandRrNumber = record.get('demandRrNumber');
       const joinedAt = record.get('joinedAt');
-      
+
       const formatted = formatProfileForResponse(candidateProps);
-      
+
       candidates.push({
         ...formatted,
         joinedDemandId: demandId ? (demandId.low !== undefined ? demandId.toNumber() : demandId) : null,
@@ -761,19 +772,19 @@ router.get("/by-status", async (req, res) => {
         status: status
       });
     }
-    
+
     res.json({
       success: true,
       data: candidates,
       totalCount: candidates.length
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching candidates by status:", err.message);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to fetch candidates by status",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -786,14 +797,14 @@ router.get("/by-status", async (req, res) => {
  */
 router.get("/hidden-ids", async (req, res) => {
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
       MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile)
       WHERE r.status IN ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline']
       RETURN c.Can_ID as canId, c.id as id
     `);
-    
+
     const ids = new Set();
     for (const record of result.records) {
       const canId = record.get('canId');
@@ -804,18 +815,18 @@ router.get("/hidden-ids", async (req, res) => {
         ids.add(typeof id === 'number' ? Math.floor(id) : parseInt(id));
       }
     }
-    
+
     res.json({
       success: true,
       data: Array.from(ids)
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching hidden candidate IDs:", err.message);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to fetch hidden candidate IDs",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -827,9 +838,9 @@ router.get("/hidden-ids", async (req, res) => {
  * Get all candidates with "Joined" status from any demand
  */
 router.get("/joined/all", async (req, res) => {
-  
+
   const session = driver.session();
-  
+
   try {
     // Query to find candidates with "Joined" status from any demand
     const result = await session.run(`
@@ -838,19 +849,19 @@ router.get("/joined/all", async (req, res) => {
       RETURN c, d.id as demandId, d.rrNumber as demandRrNumber, r.status as status, r.selectedAt as joinedAt
       ORDER BY r.updatedAt DESC
     `);
-    
-    
+
+
     const joinedCandidates = [];
-    
+
     for (const record of result.records) {
       const candidateProps = record.get('c').properties;
       const demandId = record.get('demandId');
       const demandRrNumber = record.get('demandRrNumber');
       const joinedAt = record.get('joinedAt');
-      
+
       // Format the candidate profile
       const formatted = formatProfileForResponse(candidateProps);
-      
+
       // Add joined-specific fields
       joinedCandidates.push({
         ...formatted,
@@ -860,19 +871,19 @@ router.get("/joined/all", async (req, res) => {
         status: 'Joined'
       });
     }
-    
+
     res.json({
       success: true,
       data: joinedCandidates,
       totalCount: joinedCandidates.length
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching joined candidates:", err.message);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Failed to fetch joined candidates",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -880,24 +891,24 @@ router.get("/joined/all", async (req, res) => {
 });
 router.get("/:candidateId/status", async (req, res) => {
   const { candidateId } = req.params;
-  
-  
+
+
   const session = driver.session();
-  
+
   try {
     // Get candidate's in-progress status
     const result = await session.run(
       "MATCH (c:Candidate_Profile {Can_ID: $id}) RETURN c.isInProgress as isInProgress, c.lastStatusUpdate as lastUpdate",
       { id: parseInt(candidateId) }
     );
-    
+
     if (result.records.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Candidate not found"
       });
     }
-    
+
     res.json({
       success: true,
       data: {
@@ -906,7 +917,7 @@ router.get("/:candidateId/status", async (req, res) => {
         lastStatusUpdate: result.records[0].get('lastUpdate')
       }
     });
-    
+
   } catch (err) {
     console.error(`❌ Error fetching candidate status:`, err);
     res.status(500).json({
@@ -925,10 +936,10 @@ router.get("/:candidateId/status", async (req, res) => {
  */
 router.get("/:candidateId/status-for-client/:clientName", async (req, res) => {
   const { candidateId, clientName } = req.params;
-  
-  
+
+
   const session = driver.session();
-  
+
   try {
     // Check zone first (rejection status)
     const zoneResult = await session.run(`
@@ -939,13 +950,13 @@ router.get("/:candidateId/status-for-client/:clientName", async (req, res) => {
       candidateId: parseInt(candidateId),
       clientName: clientName
     });
-    
+
     if (zoneResult.records.length > 0) {
       const zoneEntry = zoneResult.records[0].get('z').properties;
       const expiryDate = new Date(zoneEntry.expiryDate);
       const now = new Date();
       const daysRemaining = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-      
+
       return res.json({
         success: true,
         status: "Rejected",
@@ -958,7 +969,7 @@ router.get("/:candidateId/status-for-client/:clientName", async (req, res) => {
         }
       });
     }
-    
+
     // Check if candidate is in progress for this client
     const candidateResult = await session.run(`
       MATCH (c:Candidate_Profile {Can_ID: $candidateId})
@@ -968,7 +979,7 @@ router.get("/:candidateId/status-for-client/:clientName", async (req, res) => {
       candidateId: parseInt(candidateId),
       clientName: clientName
     });
-    
+
     if (candidateResult.records.length > 0) {
       return res.json({
         success: true,
@@ -979,7 +990,7 @@ router.get("/:candidateId/status-for-client/:clientName", async (req, res) => {
         }
       });
     }
-    
+
     // Default status
     res.json({
       success: true,
@@ -987,7 +998,7 @@ router.get("/:candidateId/status-for-client/:clientName", async (req, res) => {
       statusType: "not-started",
       message: "Candidate is available for this client"
     });
-    
+
   } catch (err) {
     console.error(`❌ Error fetching client-specific status:`, err);
     res.status(500).json({
@@ -1058,16 +1069,16 @@ router.post("/upload-personal-resume", upload.single('resume'), async (req, res)
 router.put("/:candidateId/status-for-client/:clientName", async (req, res) => {
   const { candidateId, clientName } = req.params;
   const { status, reason } = req.body;
-  
-  
+
+
   const session = driver.session();
-  
+
   try {
     if (status === "rejected") {
       // Add to zone for 90 days
       const expiryDate = new Date();
       expiryDate.setDate(expiryDate.getDate() + 90);
-      
+
       await session.run(`
         CREATE (z:Zone {
           candidateId: $candidateId,
@@ -1084,12 +1095,12 @@ router.put("/:candidateId/status-for-client/:clientName", async (req, res) => {
         reason: reason || "Rejected by recruiter",
         expiryDate: expiryDate.toISOString()
       });
-      
+
       res.json({
         success: true,
         message: `Candidate ${candidateId} rejected for ${clientName}. In zone until ${expiryDate.toISOString()}`
       });
-      
+
     } else if (status === "in-progress") {
       // Update candidate's in-progress status
       await session.run(`
@@ -1102,19 +1113,19 @@ router.put("/:candidateId/status-for-client/:clientName", async (req, res) => {
         candidateId: parseInt(candidateId),
         clientName: clientName
       });
-      
+
       res.json({
         success: true,
         message: `Candidate ${candidateId} marked as in progress for ${clientName}`
       });
-      
+
     } else {
       res.status(400).json({
         success: false,
         message: "Invalid status. Must be 'rejected' or 'in-progress'"
       });
     }
-    
+
   } catch (err) {
     console.error(`❌ Error updating candidate status:`, err);
     res.status(500).json({
@@ -1139,9 +1150,9 @@ router.get("/:id", async (req, res) => {
     );
 
     if (!result.records.length) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Candidate profile not found" 
+        message: "Candidate profile not found"
       });
     }
 
@@ -1154,10 +1165,10 @@ router.get("/:id", async (req, res) => {
     });
   } catch (err) {
     console.error(`❌ Error fetching candidate profile ${id}:`, err.message);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Error fetching candidate profile",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -1167,7 +1178,7 @@ router.get("/:id", async (req, res) => {
 
 router.post("/", upload.single('resume'), async (req, res) => {
 
-  
+
   const session = driver.session();
 
   try {
@@ -1211,13 +1222,13 @@ router.post("/", upload.single('resume'), async (req, res) => {
     const existingIdsResult = await session.run(
       "MATCH (c:Candidate_Profile) RETURN c.Can_ID as canId ORDER BY c.Can_ID"
     );
-    
+
     const existingIds = existingIdsResult.records
       .map(record => toNumber(record.get('canId')))
       .filter(id => id !== null && id !== undefined)
       .sort((a, b) => a - b);
-    
-    
+
+
     let nextCanId = 1;
     for (let i = 0; i < existingIds.length; i++) {
       if (existingIds[i] === nextCanId) {
@@ -1226,7 +1237,7 @@ router.post("/", upload.single('resume'), async (req, res) => {
         break;
       }
     }
-    
+
 
     // Initialize storage variables
     let googleDriveFileId = null;
@@ -1236,15 +1247,15 @@ router.post("/", upload.single('resume'), async (req, res) => {
 
     // Handle file upload if present
     if (req.file) {
-      console.log("File received:", {
-        originalname: req.file.originalname,
-        size: req.file.size,
-        mimetype: req.file.mimetype
-      });
-      
+      // console.log("File received:", {
+      //   originalname: req.file.originalname,
+      //   size: req.file.size,
+      //   mimetype: req.file.mimetype
+      // });
+
       // Try Google Drive first
       const driveResult = await uploadToGoogleDrive(req.file, req.body.name);
-      
+
       if (driveResult) {
         googleDriveFileId = driveResult.googleDriveFileId;
         googleDriveViewLink = driveResult.googleDriveViewLink;
@@ -1260,59 +1271,59 @@ router.post("/", upload.single('resume'), async (req, res) => {
       }
     }
 
-  let keySkills = req.body.keySkills;
+    let keySkills = req.body.keySkills;
 
-if (typeof keySkills === 'string') {
-  try {
-    const parsed = JSON.parse(keySkills);
-    if (Array.isArray(parsed)) {
-      keySkills = parsed;
+    if (typeof keySkills === 'string') {
+      try {
+        const parsed = JSON.parse(keySkills);
+        if (Array.isArray(parsed)) {
+          keySkills = parsed;
+        } else {
+          keySkills = [parsed];
+        }
+      } catch (e) {
+        if (keySkills.includes(',')) {
+          keySkills = keySkills.split(',').map(s => s.trim()).filter(s => s);
+        } else {
+          keySkills = [keySkills.trim()];
+        }
+      }
+    } else if (Array.isArray(keySkills)) {
+      keySkills = keySkills.filter(s => s && s.trim()).map(s => s.trim());
     } else {
-      keySkills = [parsed];
+      keySkills = [];
     }
-  } catch (e) {
-    if (keySkills.includes(',')) {
-      keySkills = keySkills.split(',').map(s => s.trim()).filter(s => s);
-    } else {
-      keySkills = [keySkills.trim()];
-    }
-  }
-} else if (Array.isArray(keySkills)) {
-  keySkills = keySkills.filter(s => s && s.trim()).map(s => s.trim());
-} else {
-  keySkills = [];
-}
 
-// Prepare profile data
-const profileData = {
-  "Candidate Name": req.body.name,
-  "Email": req.body.email,
-  "Mobile No": req.body.mobile,
-  "Experience": req.body.experience || "",
-  "Current Org": req.body.currentOrg || "",
-  "Current CTC": req.body.currentCTC || "",
-  "Expected CTC": req.body.expectedCTC || "",
-  "Notice Period in days": req.body.noticePeriod || "",
-  "Profiles sourced by": req.body.profileSourcedBy || "",
-  "Client Name": req.body.clientName || "",
-  "Profile submission date": req.body.profileSubmissionDate || "",
-  "Key Skills": keySkills,
-  "Can_ID": nextCanId,
-  "Visa type": req.body.visaType || "NA",
-   "Visa Validity Date": req.body.visaValidityDate || "",  
-  "resumePath": resumePath,
-  "googleDriveFileId": googleDriveFileId,
-  "googleDriveViewLink": googleDriveViewLink,
-  "googleDriveDownloadLink": googleDriveDownloadLink,
-  "createdAt": new Date().toISOString(),
-  "updatedAt": new Date().toISOString(),
-  "id": nextCanId,
-  // ✅ ADD THIS FLAG
-  "isInProgress": false,  // false = not in progress, true = in progress
-  "lastStatusUpdate": new Date().toISOString()
-};
+    // Prepare profile data
+    const profileData = {
+      "Candidate Name": req.body.name,
+      "Email": req.body.email,
+      "Mobile No": req.body.mobile,
+      "Experience": req.body.experience || "",
+      "Current Org": req.body.currentOrg || "",
+      "Current CTC": req.body.currentCTC || "",
+      "Expected CTC": req.body.expectedCTC || "",
+      "Notice Period in days": req.body.noticePeriod || "",
+      "Profiles sourced by": req.body.profileSourcedBy || "",
+      "Client Name": req.body.clientName || "",
+      "Profile submission date": req.body.profileSubmissionDate || "",
+      "Key Skills": keySkills,
+      "Can_ID": nextCanId,
+      "Visa type": req.body.visaType || "NA",
+      "Visa Validity Date": req.body.visaValidityDate || "",
+      "resumePath": resumePath,
+      "googleDriveFileId": googleDriveFileId,
+      "googleDriveViewLink": googleDriveViewLink,
+      "googleDriveDownloadLink": googleDriveDownloadLink,
+      "createdAt": new Date().toISOString(),
+      "updatedAt": new Date().toISOString(),
+      "id": nextCanId,
+      // ✅ ADD THIS FLAG
+      "isInProgress": false,  // false = not in progress, true = in progress
+      "lastStatusUpdate": new Date().toISOString()
+    };
 
-  
+
 
     // Create the candidate
     const result = await session.run(
@@ -1332,7 +1343,7 @@ const profileData = {
 
   } catch (err) {
     console.error("❌ Error creating candidate profile:", err);
-    
+
     // Check for duplicate email/mobile errors
     if (err.message && (err.message.includes("Email") || err.message.includes("Mobile"))) {
       return res.status(400).json({
@@ -1341,7 +1352,7 @@ const profileData = {
         error: err.message
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: "Failed to create candidate profile",
@@ -1357,7 +1368,7 @@ const profileData = {
  * Update candidate's in-progress status based on demand selection
  */
 router.put("/:id/progress", async (req, res) => {
-  
+
   const session = driver.session();
   const candidateId = parseInt(req.params.id);
   const { isInProgress } = req.body;
@@ -1370,9 +1381,9 @@ router.put("/:id/progress", async (req, res) => {
     );
 
     if (!checkResult.records.length) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Candidate not found" 
+        message: "Candidate not found"
       });
     }
 
@@ -1382,15 +1393,15 @@ router.put("/:id/progress", async (req, res) => {
        SET c.isInProgress = $isInProgress,
            c.lastStatusUpdate = $lastUpdate
        RETURN c`,
-      { 
-        id: candidateId, 
+      {
+        id: candidateId,
         isInProgress: isInProgress,
         lastUpdate: new Date().toISOString()
       }
     );
 
     const updated = result.records[0].get("c").properties;
-    
+
 
     res.json({
       success: true,
@@ -1401,13 +1412,13 @@ router.put("/:id/progress", async (req, res) => {
         lastStatusUpdate: updated.lastStatusUpdate
       }
     });
-    
+
   } catch (err) {
     console.error(`❌ Error updating in-progress status for candidate ${candidateId}:`, err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to update candidate status",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -1420,7 +1431,7 @@ router.put("/:id/progress", async (req, res) => {
  * Now checks both isInProgress flag AND status from selected-candidates
  */
 router.post("/progress/batch", async (req, res) => {
-  
+
   const session = driver.session();
   const { candidateIds, demandId } = req.body;
 
@@ -1433,7 +1444,7 @@ router.post("/progress/batch", async (req, res) => {
 
   try {
 
-    
+
     // Define active statuses that should show "In Progress"
     const activeStatuses = [
       'In Progress',
@@ -1444,20 +1455,20 @@ router.post("/progress/batch", async (req, res) => {
       'Pending Offer',
       'Pending Joinee'
     ];
-    
+
     // OPTIMIZED BATCH QUERIES
     const ids = candidateIds.map(id => parseInt(id)).filter(id => !isNaN(id));
     const progressMap = {};
     ids.forEach(id => {
       progressMap[id] = { candidateId: id, isInProgress: false, status: null };
     });
-    
+
     // 1. Fetch isInProgress for all candidates in one query
     const candidateResult = await session.run(
       "MATCH (c:Candidate_Profile) WHERE c.Can_ID IN $ids RETURN c.Can_ID as canId, c.isInProgress as isInProgress",
       { ids }
     );
-    
+
     candidateResult.records.forEach(record => {
       const canId = record.get('canId');
       const numCanId = typeof canId === 'number' ? Math.floor(canId) : (canId && canId.low !== undefined ? canId.low : parseInt(canId));
@@ -1465,19 +1476,19 @@ router.post("/progress/batch", async (req, res) => {
         progressMap[numCanId].isInProgress = record.get('isInProgress') === true;
       }
     });
-    
+
     // 2. If demandId is provided, fetch selected-candidates statuses in one query
     if (demandId) {
       const selectedResult = await session.run(
         "MATCH (sc:SelectedCandidate) WHERE sc.demandId = $demandId AND sc.canId IN $ids RETURN sc.canId as canId, sc.status as status",
         { demandId: parseInt(demandId), ids }
       );
-      
+
       selectedResult.records.forEach(record => {
         const canId = record.get('canId');
         const numCanId = typeof canId === 'number' ? Math.floor(canId) : (canId && canId.low !== undefined ? canId.low : parseInt(canId));
         const status = record.get('status');
-        
+
         if (progressMap[numCanId]) {
           progressMap[numCanId].status = status;
           if (status && activeStatuses.includes(status) && !progressMap[numCanId].isInProgress) {
@@ -1486,11 +1497,11 @@ router.post("/progress/batch", async (req, res) => {
         }
       });
     }
-    
+
     const results = Object.values(progressMap);
-    
+
     const inProgressCount = results.filter(r => r.isInProgress).length;
-    
+
 
     res.json({
       success: true,
@@ -1501,13 +1512,13 @@ router.post("/progress/batch", async (req, res) => {
         notInProgress: candidateIds.length - inProgressCount
       }
     });
-    
+
   } catch (err) {
     console.error(`❌ Error fetching batch progress status:`, err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to fetch candidate statuses",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -1516,7 +1527,7 @@ router.post("/progress/batch", async (req, res) => {
 
 
 router.put("/:id", upload.single('resume'), async (req, res) => {
-  
+
   const session = driver.session();
   const id = parseInt(req.params.id);
 
@@ -1528,9 +1539,9 @@ router.put("/:id", upload.single('resume'), async (req, res) => {
     );
 
     if (!checkResult.records.length) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Candidate profile not found" 
+        message: "Candidate profile not found"
       });
     }
 
@@ -1579,17 +1590,17 @@ router.put("/:id", upload.single('resume'), async (req, res) => {
 
     // Handle new file upload if present
     if (req.file) {
-   
-      
+
+
       // Try Google Drive first
       const driveResult = await uploadToGoogleDrive(req.file, req.body.name);
-      
+
       if (driveResult) {
         // Google Drive upload successful
         googleDriveFileId = driveResult.googleDriveFileId;
         googleDriveViewLink = driveResult.googleDriveViewLink;
         googleDriveDownloadLink = driveResult.googleDriveDownloadLink;
-        
+
         // If there was an old local file, delete it
         if (formattedExisting.resumePath) {
           const oldResumePath = path.join(__dirname, '..', formattedExisting.resumePath);
@@ -1599,6 +1610,12 @@ router.put("/:id", upload.single('resume'), async (req, res) => {
           }
         }
         
+        // If there was an old Google Drive file, delete it
+        if (formattedExisting.googleDriveFileId) {
+          await deleteFileFromDrive(formattedExisting.googleDriveFileId);
+          console.log("✅ Old Google Drive resume deleted");
+        }
+
         resumePath = null;
         console.log("✅ New resume stored in Google Drive");
       } else {
@@ -1611,56 +1628,56 @@ router.put("/:id", upload.single('resume'), async (req, res) => {
       }
     }
 
-   let keySkills = req.body.keySkills;
+    let keySkills = req.body.keySkills;
 
-if (typeof keySkills === 'string') {
-  try {
-    const parsed = JSON.parse(keySkills);
-    if (Array.isArray(parsed)) {
-      keySkills = parsed;
+    if (typeof keySkills === 'string') {
+      try {
+        const parsed = JSON.parse(keySkills);
+        if (Array.isArray(parsed)) {
+          keySkills = parsed;
+        } else {
+          keySkills = [parsed];
+        }
+      } catch (e) {
+        if (keySkills.includes(',')) {
+          keySkills = keySkills.split(',').map(s => s.trim()).filter(s => s);
+        } else {
+          keySkills = [keySkills.trim()];
+        }
+      }
+    } else if (Array.isArray(keySkills)) {
+      keySkills = keySkills.filter(s => s && s.trim()).map(s => s.trim());
     } else {
-      keySkills = [parsed];
+      keySkills = [];
     }
-  } catch (e) {
-    if (keySkills.includes(',')) {
-      keySkills = keySkills.split(',').map(s => s.trim()).filter(s => s);
-    } else {
-      keySkills = [keySkills.trim()];
-    }
-  }
-} else if (Array.isArray(keySkills)) {
-  keySkills = keySkills.filter(s => s && s.trim()).map(s => s.trim());
-} else {
-  keySkills = [];
-}
 
     // Prepare update data
-// Prepare update data - with non-editable submission date
-const updateData = {
-  "Candidate Name": req.body.name,
-  "Email": req.body.email,
-  "Mobile No": req.body.mobile,
-  "Experience": req.body.experience || formattedExisting.experience || "",
-  "Current Org": req.body.currentOrg || formattedExisting.currentOrg || "",
-  "Current CTC": req.body.currentCTC || formattedExisting.currentCTC || "",
-  "Expected CTC": req.body.expectedCTC || formattedExisting.expectedCTC || "",
-  "Notice Period in days": req.body.noticePeriod || formattedExisting.noticePeriod || "",
-  "Profiles sourced by": req.body.profileSourcedBy || formattedExisting.profileSourcedBy || "",
-  "Client Name": req.body.clientName || formattedExisting.clientName || "",
-  // IMPORTANT: Always use existing submission date - never allow updates
-"Profile submission date": req.body.profileSubmissionDate || formattedExisting.profileSubmissionDate || "",
-  "Key Skills": Array.isArray(keySkills) ? keySkills : (keySkills || formattedExisting.keySkills || []),
-  "Can_ID": formattedExisting.canId || id,
-  "Visa type": req.body.visaType || formattedExisting.visaType || "NA",
-    "Visa Validity Date": req.body.visaValidityDate || "",
-  "resumePath": resumePath,
-  "googleDriveFileId": googleDriveFileId,
-  "googleDriveViewLink": googleDriveViewLink,
-  "googleDriveDownloadLink": googleDriveDownloadLink,
-  "updatedAt": new Date().toISOString(),
-  "createdAt": formattedExisting.createdAt,
-  "id": formattedExisting.id || id
-};
+    // Prepare update data - with non-editable submission date
+    const updateData = {
+      "Candidate Name": req.body.name,
+      "Email": req.body.email,
+      "Mobile No": req.body.mobile,
+      "Experience": req.body.experience || formattedExisting.experience || "",
+      "Current Org": req.body.currentOrg || formattedExisting.currentOrg || "",
+      "Current CTC": req.body.currentCTC || formattedExisting.currentCTC || "",
+      "Expected CTC": req.body.expectedCTC || formattedExisting.expectedCTC || "",
+      "Notice Period in days": req.body.noticePeriod || formattedExisting.noticePeriod || "",
+      "Profiles sourced by": req.body.profileSourcedBy || formattedExisting.profileSourcedBy || "",
+      "Client Name": req.body.clientName || formattedExisting.clientName || "",
+      // IMPORTANT: Always use existing submission date - never allow updates
+      "Profile submission date": req.body.profileSubmissionDate || formattedExisting.profileSubmissionDate || "",
+      "Key Skills": Array.isArray(keySkills) ? keySkills : (keySkills || formattedExisting.keySkills || []),
+      "Can_ID": formattedExisting.canId || id,
+      "Visa type": req.body.visaType || formattedExisting.visaType || "NA",
+      "Visa Validity Date": req.body.visaValidityDate || "",
+      "resumePath": resumePath,
+      "googleDriveFileId": googleDriveFileId,
+      "googleDriveViewLink": googleDriveViewLink,
+      "googleDriveDownloadLink": googleDriveDownloadLink,
+      "updatedAt": new Date().toISOString(),
+      "createdAt": formattedExisting.createdAt,
+      "id": formattedExisting.id || id
+    };
 
 
     const result = await session.run(
@@ -1681,10 +1698,10 @@ const updateData = {
     });
   } catch (err) {
     console.error(`❌ Error updating candidate profile ${id}:`, err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to update candidate profile",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -1763,17 +1780,17 @@ router.delete("/:id", async (req, res) => {
 router.get("/resume/:filename", (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join(__dirname, "../uploads", filename);
-  
-  
+
+
   if (fs.existsSync(filePath)) {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     res.sendFile(filePath);
   } else {
     console.error("Resume not found:", filePath);
-    res.status(404).json({ 
-      success: false, 
-      message: "Resume not found" 
+    res.status(404).json({
+      success: false,
+      message: "Resume not found"
     });
   }
 });
@@ -1784,11 +1801,11 @@ router.get("/resume/:filename", (req, res) => {
  */
 router.get("/check-zone/:candidateId/:clientName", async (req, res) => {
   const { candidateId, clientName } = req.params;
-  
-  
-  
+
+
+
   const session = driver.session();
-  
+
   try {
     const result = await session.run(`
       MATCH (z:Zone {candidateId: $candidateId, clientName: $clientName})
@@ -1798,7 +1815,7 @@ router.get("/check-zone/:candidateId/:clientName", async (req, res) => {
       candidateId: parseInt(candidateId),
       clientName: clientName
     });
-    
+
     if (result.records.length === 0) {
       return res.json({
         success: true,
@@ -1807,12 +1824,12 @@ router.get("/check-zone/:candidateId/:clientName", async (req, res) => {
         message: "Candidate is eligible for this client"
       });
     }
-    
+
     const zoneEntry = result.records[0].get('z').properties;
     const expiryDate = new Date(zoneEntry.expiryDate);
     const now = new Date();
     const daysRemaining = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-    
+
     res.json({
       success: true,
       inZone: true,
@@ -1828,7 +1845,7 @@ router.get("/check-zone/:candidateId/:clientName", async (req, res) => {
       },
       message: `Candidate cannot be selected for ${clientName}. In zone for ${daysRemaining} more days.`
     });
-    
+
   } catch (err) {
     console.error("❌ Error checking zone:", err);
     res.status(500).json({
@@ -1846,20 +1863,20 @@ router.get("/check-zone/:candidateId/:clientName", async (req, res) => {
  * Check auto-export status and history
  */
 router.get("/export/status", async (req, res) => {
-  
+
   try {
     const fs = require('fs');
     const path = require('path');
     const historyFile = path.join(__dirname, '../../exports/export_history.json');
-    
+
     let history = [];
     if (fs.existsSync(historyFile)) {
       history = JSON.parse(fs.readFileSync(historyFile));
     }
-    
+
     const { listFiles } = require('../services/googleDrive');
     const driveFiles = await listFiles();
-    
+
     res.json({
       success: true,
       autoExportEnabled: true,
@@ -1875,11 +1892,11 @@ router.get("/export/status", async (req, res) => {
 
 // Change from GET to POST
 router.post("/export/trigger", async (req, res) => {
-  
+
   try {
-    const { manualExport } = require('../services/autoExport.js');
+    const { manualExport } = require('../services/autoExport');
     const result = await manualExport();
-    
+
     res.json(result);
   } catch (err) {
     console.error("Manual export error:", err);
@@ -1888,11 +1905,11 @@ router.post("/export/trigger", async (req, res) => {
 });
 // Temporary GET version for browser testing
 router.get("/export/trigger", async (req, res) => {
-  
+
   try {
     const { manualExport } = require('../services/autoExport');
     const result = await manualExport();
-    
+
     res.json(result);
   } catch (err) {
     console.error("Manual export error:", err);
@@ -1901,24 +1918,24 @@ router.get("/export/trigger", async (req, res) => {
 });
 
 router.get("/export/excel", async (req, res) => {
-  
+
   const session = driver.session();
-  
+
   try {
     // Get all candidates
     const result = await session.run(
       "MATCH (c:Candidate_Profile) RETURN c ORDER BY c.Can_ID DESC"
     );
-    
+
     const candidates = [];
-    
+
     for (const record of result.records) {
       const profile = record.get("c").properties;
       const formatted = formatProfileForResponse(profile);
       candidates.push(formatted);
     }
-    
-    
+
+
     // Prepare data for Excel
     const excelData = candidates.map(candidate => {
       // Format skills as string
@@ -1928,7 +1945,7 @@ router.get("/export/excel", async (req, res) => {
       } else if (typeof candidate.keySkills === 'string') {
         skillsString = candidate.keySkills;
       }
-      
+
       // Format dates
       const formatDate = (dateValue) => {
         if (!dateValue) return '';
@@ -1939,7 +1956,7 @@ router.get("/export/excel", async (req, res) => {
           return dateValue;
         }
       };
-      
+
       return {
         'Can_ID': candidate.canId || candidate.id || '',
         'Candidate Name': candidate.name || '',
@@ -1966,10 +1983,10 @@ router.get("/export/excel", async (req, res) => {
         'Is In Progress': candidate.isInProgress ? 'true' : 'false'
       };
     });
-    
+
     // Create Excel file
     const worksheet = XLSX.utils.json_to_sheet(excelData);
-    
+
     // Auto-size columns
     worksheet['!cols'] = [
       { wch: 10 }, // Can_ID
@@ -1996,24 +2013,24 @@ router.get("/export/excel", async (req, res) => {
       { wch: 20 }, // Last Status Update
       { wch: 12 }  // Is In Progress
     ];
-    
+
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'All Candidates');
-    
+
     // Generate filename with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const filename = `candidates_export_${timestamp}.xlsx`;
-    
+
     // Set response headers for file download
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    
+
     // Write to response
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
     res.send(buffer);
-    
+
     console.log(`✅ Excel export completed for ${candidates.length} candidates`);
-    
+
   } catch (err) {
     console.error("❌ Error exporting candidates to Excel:", err);
     res.status(500).json({
