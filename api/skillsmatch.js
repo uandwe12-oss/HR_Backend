@@ -15,13 +15,9 @@ const toNumber = (value) => {
 const extractSkills = (skillsField) => {
   if (!skillsField) return [];
   
-  console.log("Extracting skills from:", skillsField);
-  console.log("Type:", typeof skillsField);
-  
   // If it's already an array
   if (Array.isArray(skillsField)) {
     const cleaned = skillsField.filter(s => s && typeof s === 'string' && s.trim()).map(s => s.trim());
-    console.log("Array input, cleaned:", cleaned);
     return cleaned;
   }
   
@@ -30,30 +26,25 @@ const extractSkills = (skillsField) => {
     // Try to parse as JSON
     try {
       const parsed = JSON.parse(skillsField);
-      console.log("Parsed JSON:", parsed);
       if (Array.isArray(parsed)) {
         const cleaned = parsed.filter(s => s && typeof s === 'string' && s.trim()).map(s => s.trim());
-        console.log("JSON array, cleaned:", cleaned);
         return cleaned;
       }
       if (typeof parsed === 'string') {
-        console.log("JSON string:", [parsed.trim()]);
         return [parsed.trim()];
       }
     } catch (e) {
-      console.log("Not JSON, treating as regular string");
+      // Not JSON, treating as regular string
     }
     
     // Check if it contains commas
     if (skillsField.includes(',')) {
       const cleaned = skillsField.split(',').map(s => s.trim()).filter(s => s);
-      console.log("Split by comma:", cleaned);
       return cleaned;
     }
     
     // Single skill
     const trimmed = skillsField.trim();
-    console.log("Single skill:", trimmed ? [trimmed] : []);
     return trimmed ? [trimmed] : [];
   }
   
@@ -68,12 +59,10 @@ const extractSkills = (skillsField) => {
           values.push(val.toString().trim());
         }
       }
-      console.log("Neo4j list:", values);
       return values;
     }
   }
   
-  console.log("No skills found, returning empty array");
   return [];
 };
 
@@ -83,7 +72,6 @@ const extractSkills = (skillsField) => {
 router.get("/", async (req, res) => {
   const { skill } = req.query;
 
-  console.log(`\n📡 GET /api/skillsmatch - Filtering by skill: "${skill}"`);
 
   if (!skill) {
     return res.status(400).json({
@@ -101,7 +89,6 @@ router.get("/", async (req, res) => {
       "MATCH (c:Candidate_Profile) RETURN c"
     );
 
-    console.log(`Found ${result.records.length} total candidates`);
 
     // Filter candidates that have the matching skill
     const candidates = [];
@@ -113,22 +100,14 @@ router.get("/", async (req, res) => {
       // Extract skills properly
       const skills = extractSkills(skillsField);
       
-      console.log(`Candidate: ${candidateName}`);
-      console.log(`  Raw skills field:`, skillsField);
-      console.log(`  Parsed skills:`, skills);
-      
       // Check if any skill matches (case-insensitive)
       const hasSkill = skills.some(s => s.toLowerCase() === skill.toLowerCase());
       
       if (hasSkill) {
-        console.log(`  ✅ MATCH: ${candidateName} has skill: ${skill}`);
         candidates.push(candidate);
-      } else {
-        console.log(`  ❌ No match for skill: ${skill}`);
       }
     });
 
-    console.log(`✅ Found ${candidates.length} candidates with skill: ${skill}`);
 
     res.json({
       success: true,
@@ -167,7 +146,7 @@ router.get("/skills", async (req, res) => {
     );
     
     const masterSkills = skillsResult.records.map(record => record.get("skillName"));
-    console.log(`Found ${masterSkills.length} master skills`);
+
     
     // Get all candidates to count skills
     const candidatesResult = await session.run(
