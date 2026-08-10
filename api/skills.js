@@ -10,7 +10,7 @@ const getDriver = require("../lib/neo4j");
  * =================================================
  */
 router.get("/test", async (req, res) => {
-  console.log("\n📡 GET /api/skills/test - Called");
+  // console.log("\n📡 GET /api/skills/test - Called");
 
   const driver = getDriver();
   const session = driver.session();
@@ -44,7 +44,7 @@ router.get("/test", async (req, res) => {
  * =================================================
  */
 router.get("/", async (req, res) => {
-  console.log("\n📡 GET /api/skills - Fetching all skills");
+  // console.log("\n📡 GET /api/skills - Fetching all skills");
 
   const driver = getDriver();
   const session = driver.session();
@@ -54,7 +54,7 @@ router.get("/", async (req, res) => {
       "MATCH (s:Skill) RETURN s ORDER BY s.name ASC"
     );
 
-    console.log(`📊 Found ${result.records.length} skills`);
+    // console.log(`📊 Found ${result.records.length} skills`);
 
     const skills = result.records.map(record => {
       const skill = record.get("s").properties;
@@ -87,7 +87,7 @@ router.get("/", async (req, res) => {
  * =================================================
  */
 router.post("/", async (req, res) => {
-  console.log("\n📡 POST /api/skills - Creating new skill");
+  // console.log("\n📡 POST /api/skills - Creating new skill");
   
   const driver = getDriver();
   const session = driver.session();
@@ -125,7 +125,7 @@ router.post("/", async (req, res) => {
     // Remove createdAt if it somehow exists
     const { createdAt, ...skillWithoutCreatedAt } = skill;
     
-    console.log(`✅ Skill created: ${skillWithoutCreatedAt.name}`);
+    // console.log(`✅ Skill created: ${skillWithoutCreatedAt.name}`);
     
     res.status(201).json({
       success: true,
@@ -151,14 +151,14 @@ router.post("/", async (req, res) => {
  * =================================================
  */
 router.delete("/:name", async (req, res) => {
-  console.log(`\n📡 DELETE /api/skills/${req.params.name}`);
+  // console.log(`\n📡 DELETE /api/skills/${req.params.name}`);
 
   const driver = getDriver();
   const session = driver.session();
   const name = req.params.name;
 
   try {
-    console.log(`🔍 Checking if skill exists: ${name}`);
+    // console.log(`🔍 Checking if skill exists: ${name}`);
 
     const check = await session.run(
       "MATCH (s:Skill {name:$name}) RETURN s",
@@ -172,7 +172,6 @@ router.delete("/:name", async (req, res) => {
       });
     }
 
-    console.log(`🗑️ Deleting skill: ${name}`);
 
     await session.run(
       "MATCH (s:Skill {name:$name}) DETACH DELETE s",
