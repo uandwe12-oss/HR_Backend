@@ -5,7 +5,12 @@
   "scripts": {
     "start": "node server.js"
   },
-   "@azure/msal-node": "^5.5.0",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@azure/msal-node": "^5.5.0",
     "axios": "^1.13.6",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
