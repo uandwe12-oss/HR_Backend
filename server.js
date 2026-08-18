@@ -106,6 +106,7 @@ try {
 ================================ */
 
 app.use("/api/login", require("./api/login"));
+app.use("/api/auth", require("./api/auth"));
 app.use("/api/demand", require("./api/demand"));
 app.use("/api/candidates", require("./api/candidates"));
 app.use("/api/skills", require("./api/skills"));
