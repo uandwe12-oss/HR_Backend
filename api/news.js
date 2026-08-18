@@ -42,10 +42,11 @@ router.get('/latest', async (req, res) => {
 });
 
 // Create or update news item
-router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachment', maxCount: 1 }]), async (req, res) => {
+router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachment', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
   const { id, title, linkUrl, content, nationality, layoutOrder } = req.body;
   let imageUrl = req.body.imageUrl || '';
   let attachmentUrl = req.body.attachmentUrl || '';
+  let videoUrl = req.body.videoUrl || '';
 
   if (req.files && req.files['image'] && req.files['image'][0]) {
     try {
@@ -77,6 +78,21 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachm
     }
   }
 
+  if (req.files && req.files['video'] && req.files['video'][0]) {
+    try {
+      const uploadRes = await googleDriveService.uploadNewsAttachment(
+        req.files['video'][0].buffer,
+        req.files['video'][0].originalname,
+        req.files['video'][0].mimetype
+      );
+      if (uploadRes.success) {
+        videoUrl = uploadRes.directLink;
+      }
+    } catch (e) {
+      console.error("Failed to upload news video to drive:", e);
+    }
+  }
+
   const driver = getDriver();
   const session = driver.session();
 
@@ -89,6 +105,7 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachm
         SET n.title = $title,
             n.imageUrl = CASE WHEN $imageUrl <> '' THEN $imageUrl ELSE n.imageUrl END,
             n.attachmentUrl = CASE WHEN $attachmentUrl <> '' THEN $attachmentUrl ELSE n.attachmentUrl END,
+            n.videoUrl = CASE WHEN $videoUrl <> '' THEN $videoUrl ELSE n.videoUrl END,
             n.linkUrl = $linkUrl,
             n.content = $content,
             n.nationality = $nationality,
@@ -99,6 +116,7 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachm
         title: title || '',
         imageUrl: imageUrl || '',
         attachmentUrl: attachmentUrl || '',
+        videoUrl: videoUrl || '',
         linkUrl: linkUrl || '',
         content: content || '',
         nationality: (nationality || 'ALL').toUpperCase(),
@@ -106,13 +124,16 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachm
       });
     } else {
       // Create new
-      const newsId = crypto.randomUUID();
+      const countResult = await session.run('MATCH (n:News) RETURN count(n) as c');
+      const currentCount = countResult.records[0].get('c').toNumber();
+      const newsId = `news_${currentCount + 1}`;
       result = await session.run(`
         CREATE (n:News {
           id: $id,
           title: $title,
           imageUrl: $imageUrl,
           attachmentUrl: $attachmentUrl,
+          videoUrl: $videoUrl,
           linkUrl: $linkUrl,
           content: $content,
           nationality: $nationality,
@@ -125,6 +146,7 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachm
         title: title || '',
         imageUrl: imageUrl || '',
         attachmentUrl: attachmentUrl || '',
+        videoUrl: videoUrl || '',
         linkUrl: linkUrl || '',
         content: content || '',
         nationality: (nationality || 'ALL').toUpperCase(),
@@ -147,6 +169,46 @@ router.delete('/:id', async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
   try {
+    const fetchResult = await session.run(`
+      MATCH (n:News {id: $id})
+      RETURN n.imageUrl AS imageUrl, n.attachmentUrl AS attachmentUrl, n.videoUrl AS videoUrl
+    `, { id: req.params.id });
+
+    if (fetchResult.records.length > 0) {
+      const record = fetchResult.records[0];
+      const imageUrl = record.get('imageUrl');
+      const attachmentUrl = record.get('attachmentUrl');
+      const videoUrl = record.get('videoUrl');
+
+      const extractDriveId = (url) => {
+        if (!url) return null;
+        const patterns = [
+          /\/file\/d\/([a-zA-Z0-9_-]{10,})/,
+          /\/d\/([a-zA-Z0-9_-]{10,})\//,
+          /[?&]id=([a-zA-Z0-9_-]{10,})/,
+          /open\?id=([a-zA-Z0-9_-]{10,})/,
+          /uc\?id=([a-zA-Z0-9_-]{10,})/
+        ];
+        for (const p of patterns) {
+          const m = url.match(p);
+          if (m) return m[1];
+        }
+        return null;
+      };
+
+      const filesToDelete = [imageUrl, attachmentUrl, videoUrl]
+        .map(extractDriveId)
+        .filter(id => id); // Remove nulls
+
+      for (const fileId of filesToDelete) {
+        try {
+          await googleDriveService.deleteFileFromDrive(fileId);
+        } catch (err) {
+          console.error(`Failed to delete file from drive: ${fileId}`, err);
+        }
+      }
+    }
+
     await session.run(`
       MATCH (n:News {id: $id})
       DELETE n
