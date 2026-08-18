@@ -3,7 +3,7 @@ const router = express.Router();
 const getDriver = require("../lib/neo4j");
 const crypto = require("crypto");
 const multer = require("multer");
-const { uploadPayslip } = require("../services/googleDrive");
+const { uploadPayslip, uploadChinaPayslip } = require("../services/googleDrive");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -34,7 +34,16 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       joiningBonusAnnual = 0,
       joiningBonusMonthly = 0,
       totalCtcAnnual = 0,
-      totalCtcMonthly = 0
+      totalCtcMonthly = 0,
+      grossSalaryTotal = 0,
+      socialInsEmployee = 0,
+      housingFundEmployee = 0,
+      netSalaryTotal = 0,
+      socialInsEmployer = 0,
+      housingFundEmployer = 0,
+      otherCost = 0,
+      employerCost = 0,
+      country = 'India'
     } = req.body;
 
     if (!employeeNumber || !month || !year || baseSalary === undefined) {
@@ -44,12 +53,22 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
     // Upload payslip to Google Drive if provided
     let payslipUrl = null;
     if (req.file) {
-      const uploadResult = await uploadPayslip(
-        req.file.buffer, 
-        req.file.originalname, 
-        req.file.mimetype, 
-        `${employeeNumber}_${month}_${year}`
-      );
+      let uploadResult;
+      if (country === 'China') {
+        uploadResult = await uploadChinaPayslip(
+          req.file.buffer, 
+          req.file.originalname, 
+          req.file.mimetype, 
+          `${employeeNumber}_${month}_${year}`
+        );
+      } else {
+        uploadResult = await uploadPayslip(
+          req.file.buffer, 
+          req.file.originalname, 
+          req.file.mimetype, 
+          `${employeeNumber}_${month}_${year}`
+        );
+      }
       if (uploadResult.success) {
         payslipUrl = uploadResult.viewLink;
       }
@@ -193,6 +212,14 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
             p.finalSalary = $finalSalary,
             p.employeeName = $employeeName,
             p.payslipUrl = coalesce($payslipUrl, p.payslipUrl),
+            p.grossSalaryTotal = $grossSalaryTotal,
+            p.socialInsEmployee = $socialInsEmployee,
+            p.housingFundEmployee = $housingFundEmployee,
+            p.netSalaryTotal = $netSalaryTotal,
+            p.socialInsEmployer = $socialInsEmployer,
+            p.housingFundEmployer = $housingFundEmployer,
+            p.otherCost = $otherCost,
+            p.employerCost = $employerCost,
             p.updatedAt = $updatedAt,
             p.needsRecalculation = false,
             p.recalculationReason = null
@@ -233,6 +260,14 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         deductionReason: finalReason,
         finalSalary: finalSalaryCalculated,
         payslipUrl: payslipUrl,
+        grossSalaryTotal: parseFloat(grossSalaryTotal) || 0,
+        socialInsEmployee: parseFloat(socialInsEmployee) || 0,
+        housingFundEmployee: parseFloat(housingFundEmployee) || 0,
+        netSalaryTotal: parseFloat(netSalaryTotal) || 0,
+        socialInsEmployer: parseFloat(socialInsEmployer) || 0,
+        housingFundEmployer: parseFloat(housingFundEmployer) || 0,
+        otherCost: parseFloat(otherCost) || 0,
+        employerCost: parseFloat(employerCost) || 0,
         updatedAt: now
       });
     } else {
@@ -279,6 +314,14 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
           finalSalary: $finalSalary,
           deductionReason: $deductionReason,
           payslipUrl: $payslipUrl,
+          grossSalaryTotal: $grossSalaryTotal,
+          socialInsEmployee: $socialInsEmployee,
+          housingFundEmployee: $housingFundEmployee,
+          netSalaryTotal: $netSalaryTotal,
+          socialInsEmployer: $socialInsEmployer,
+          housingFundEmployer: $housingFundEmployer,
+          otherCost: $otherCost,
+          employerCost: $employerCost,
           createdAt: $createdAt,
           updatedAt: $createdAt,
           needsRecalculation: false
@@ -319,6 +362,14 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         lopDeductionAmount: calculatedLopAmount,
         deductionReason: finalReason,
         finalSalary: finalSalaryCalculated, 
+        grossSalaryTotal: parseFloat(grossSalaryTotal) || 0,
+        socialInsEmployee: parseFloat(socialInsEmployee) || 0,
+        housingFundEmployee: parseFloat(housingFundEmployee) || 0,
+        netSalaryTotal: parseFloat(netSalaryTotal) || 0,
+        socialInsEmployer: parseFloat(socialInsEmployer) || 0,
+        housingFundEmployer: parseFloat(housingFundEmployer) || 0,
+        otherCost: parseFloat(otherCost) || 0,
+        employerCost: parseFloat(employerCost) || 0,
         payslipUrl: payslipUrl || '', createdAt: now 
       });
     }
