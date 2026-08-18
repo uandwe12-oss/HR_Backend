@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const getDriver = require("../lib/neo4j");
 const crypto = require("crypto");
+const cron = require("node-cron");
 
 // Get unread notifications for a user
 router.get("/user/:userId", async (req, res) => {
@@ -80,6 +81,43 @@ router.put("/read-all/:userId", async (req, res) => {
   } catch (error) {
     console.error("Error marking all notifications as read:", error);
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// Schedule a job to run every day at midnight (0 0 * * *)
+// to delete notifications older than 30 days.
+cron.schedule('0 0 * * *', async () => {
+  const driver = getDriver();
+  if (!driver) {
+    console.error("Cron Job: No DB connection for notification cleanup.");
+    return;
+  }
+  
+  const session = driver.session();
+  try {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const thirtyDaysAgoIso = thirtyDaysAgo.toISOString();
+    
+    const result = await session.run(`
+      MATCH (n:Notification)
+      WHERE n.createdAt < $thirtyDaysAgoIso
+      DELETE n
+      RETURN count(n) as deletedCount
+    `, { thirtyDaysAgoIso });
+    
+    if (result.records.length > 0) {
+      const countRaw = result.records[0].get("deletedCount");
+      const deletedCount = typeof countRaw.toNumber === 'function' ? countRaw.toNumber() : Number(countRaw);
+      
+      if (deletedCount > 0) {
+        console.log(`🧹 Notification Cleanup: Deleted ${deletedCount} notifications older than 30 days.`);
+      }
+    }
+  } catch (error) {
+    console.error("Error running notification cleanup cron job:", error);
   } finally {
     await session.close();
   }
