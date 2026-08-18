@@ -54,9 +54,9 @@ router.get("/microsoft/callback", async (req, res) => {
   if (!code) {
     console.error("Microsoft callback did not contain an authorization code");
 
-    return res.redirect(
-      "http://localhost:5173/myuandwe/login?error=MissingAuthorizationCode"
-    );
+return res.redirect(
+  "https://uandwe.com/myuandwe/login?error=MissingAuthorizationCode"
+);
   }
 
   const tokenRequest = {
@@ -77,8 +77,7 @@ router.get("/microsoft/callback", async (req, res) => {
       console.error("Microsoft account information was not returned");
 
       return res.redirect(
-        "http://localhost:5173/myuandwe/login?error=MicrosoftAccountMissing"
-      );
+"https://uandwe.com/myuandwe/login?error=MicrosoftAccountMissing"      );
     }
 
     const account = response.account;
@@ -94,8 +93,7 @@ router.get("/microsoft/callback", async (req, res) => {
       console.error("Microsoft email was not returned");
 
       return res.redirect(
-        "http://localhost:5173/myuandwe/login?error=EmailMissing"
-      );
+"https://uandwe.com/myuandwe/login?error=EmailMissing"      );
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -131,8 +129,7 @@ router.get("/microsoft/callback", async (req, res) => {
       );
 
       return res.redirect(
-        "http://localhost:5173/myuandwe/login?error=UnauthorizedDomain"
-      );
+"https://uandwe.com/myuandwe/login?error=UnauthorizedDomain"      );
     }
 
     console.log(
@@ -184,7 +181,7 @@ router.get("/microsoft/callback", async (req, res) => {
             createdAt: $createdAt
           })
           `,
-          { 
+          {
             email: normalizedEmail,
             name: displayName,
             createdAt: createdAt
@@ -250,11 +247,11 @@ router.get("/microsoft/callback", async (req, res) => {
       // 7. Redirect to React SSO Callback
       // ==========================================
 
-      res.redirect(
-        `http://localhost:5173/myuandwe/sso-callback?token=${encodeURIComponent(
-          token
-        )}`
-      );
+  res.redirect(
+  `https://uandwe.com/myuandwe/sso-callback?token=${encodeURIComponent(
+    token
+  )}`
+);
     } finally {
       await session.close();
     }
@@ -280,8 +277,7 @@ router.get("/microsoft/callback", async (req, res) => {
     console.error("Full error:", error);
 
     return res.redirect(
-      "http://localhost:5173/myuandwe/login?error=SSOFailed"
-    );
+"https://uandwe.com/myuandwe/login?error=SSOFailed"    );
   }
 });
 
