@@ -35,15 +35,14 @@ router.get("/groups", async (req, res) => {
 // Get holidays by group name
 router.get("/group/:groupName", async (req, res) => {
   let { groupName } = req.params;
-  const normalized = groupName.toLowerCase().replace(/\s+/g, '');
-  if (normalized === 'bangaloreuandwelabs' || normalized === 'bangaloreuandwe' || normalized === 'uandwebangalore') {
-    groupName = 'BangaloreUANDWE';
-  }
   const driver = getDriver();
   const session = driver.session();
   try {
     const result = await session.run(
-      `MATCH (g:Group {name: $groupName})-[:HAS_HOLIDAY]->(h:Holiday)
+      `MATCH (g:Group {name: $groupName})
+       OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
+       WITH DISTINCT linkedGroup
+       MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
        RETURN h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type, h.notes AS notes
        ORDER BY h.date`,
       { groupName }
@@ -86,24 +85,30 @@ router.get("/companies", async (req, res) => {
       result = await session.run(`
         MATCH (g:Group)
         WHERE g.client = $client
+        OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linked:Group)
+        WITH g, collect(DISTINCT linked.name) AS sharedWith
         RETURN DISTINCT 
           g.name AS name, 
           g.location AS location, 
           g.client AS client, 
           g.country AS country,
-          g.id AS id
+          g.id AS id,
+          sharedWith
         ORDER BY g.name
       `, { client });
     } else {
       // Get all companies
       result = await session.run(`
         MATCH (g:Group)
+        OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linked:Group)
+        WITH g, collect(DISTINCT linked.name) AS sharedWith
         RETURN DISTINCT 
           g.name AS name, 
           g.location AS location, 
           g.client AS client, 
           g.country AS country,
-          g.id AS id
+          g.id AS id,
+          sharedWith
         ORDER BY g.name
       `);
     }
@@ -113,7 +118,8 @@ router.get("/companies", async (req, res) => {
       location: record.get("location") || "",
       client: record.get("client") || "",
       country: record.get("country") || "",
-      id: record.get("id") || record.get("name")
+      id: record.get("id") || record.get("name"),
+      sharedWith: record.get("sharedWith") || []
     }));
 
     // Ensure required companies are present for dropdown
@@ -125,7 +131,8 @@ router.get("/companies", async (req, res) => {
           location: "Bangalore",
           client: "UANDWE",
           country: "India",
-          id: reqCompany
+          id: reqCompany,
+          sharedWith: [reqCompany]
         });
       }
     });
@@ -136,6 +143,34 @@ router.get("/companies", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error fetching companies:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// DELETE a company/group node
+router.delete("/companies/:name", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    const { name } = req.params;
+    
+    // First, delete any holidays that are ONLY associated with this group
+    await session.run(`
+      MATCH (g:Group {name: $name})-[:HAS_HOLIDAY]->(h:Holiday)
+      DETACH DELETE h
+    `, { name });
+
+    // Then delete the group itself
+    await session.run(`
+      MATCH (g:Group {name: $name})
+      DETACH DELETE g
+    `, { name });
+
+    res.json({ success: true, message: `Company ${name} deleted successfully` });
+  } catch (err) {
+    console.error("❌ Error deleting company:", err.message);
     res.status(500).json({ success: false, message: err.message });
   } finally {
     await session.close();
@@ -170,17 +205,7 @@ router.get("/companies/list", async (req, res) => {
       client: record.get("client") || ""
     }));
 
-    // Ensure required companies are present for dropdown
-    const requiredCompanies = ["BangaloreUANDWE", "BangaloreUANDWELabs"];
-    requiredCompanies.forEach(reqCompany => {
-      if (!companies.some(c => c.name.toLowerCase() === reqCompany.toLowerCase())) {
-        companies.push({
-          name: reqCompany,
-          location: "Bangalore",
-          client: "UANDWE"
-        });
-      }
-    });
+    // Removed hardcoded required companies
 
     companies.sort((a, b) => a.name.localeCompare(b.name));
 
@@ -236,11 +261,12 @@ router.get("/upcoming", async (req, res) => {
     let searchGroup = groupName;
     if (searchGroup) {
       const normalized = searchGroup.toLowerCase().replace(/\s+/g, '');
-      if (normalized === 'bangaloreuandwelabs' || normalized === 'bangaloreuandwe' || normalized === 'uandwebangalore') {
-        searchGroup = 'BangaloreUANDWE';
-      }
+      // Removed hardcoded logic
       result = await session.run(
-        `MATCH (g:Group {name: $searchGroup})-[:HAS_HOLIDAY]->(h:Holiday)
+        `MATCH (g:Group {name: $searchGroup})
+         OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
+         WITH DISTINCT linkedGroup
+         MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
          WHERE h.date >= $today
          RETURN h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type
          ORDER BY h.date LIMIT 10`,
@@ -315,23 +341,42 @@ router.get("/all", async (req, res) => {
 
 // Add new holiday
 router.post("/add", async (req, res) => {
-  let { name, date, day, type, notes, groupName } = req.body;
+  let { name, date, day, type, notes, groupName, groupWith } = req.body;
   if (groupName) {
     const normalized = groupName.toLowerCase().replace(/\s+/g, '');
-    if (normalized === 'bangaloreuandwelabs' || normalized === 'bangaloreuandwe' || normalized === 'uandwebangalore') {
-      groupName = 'BangaloreUANDWE';
-    }
+    // Removed hardcoded logic
   }
   const driver = getDriver();
   const session = driver.session();
   try {
     const holidayId = `hol_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    await session.run(
-      `MATCH (g:Group {name: $groupName})
-       CREATE (h:Holiday { id: $id, name: $name, date: $date, day: $day, type: $type, notes: $notes })
-       CREATE (g)-[:HAS_HOLIDAY]->(h)`,
-      { groupName, id: holidayId, name, date, day, type, notes: notes || "" }
-    );
+    
+    // Base query to create holiday
+    let query = `
+      MERGE (g:Group {name: $groupName})
+      CREATE (h:Holiday { id: $id, name: $name, date: $date, day: $day, type: $type, notes: $notes })
+      CREATE (g)-[:HAS_HOLIDAY]->(h)
+    `;
+    
+    // If groupWith is provided, link the companies
+    if (groupWith && groupWith.trim() !== "") {
+      query += `
+        WITH g
+        MERGE (g2:Group {name: $groupWith})
+        MERGE (g)-[:SHARES_HOLIDAY_CALENDAR]->(g2)
+      `;
+    }
+    
+    await session.run(query, { 
+      groupName, 
+      groupWith: groupWith || "",
+      id: holidayId, 
+      name, 
+      date, 
+      day, 
+      type, 
+      notes: notes || "" 
+    });
     res.json({ success: true, message: "Holiday added successfully", data: { id: holidayId, name } });
   } catch (err) {
     console.error("❌ Error adding holiday:", err.message);
@@ -347,15 +392,18 @@ router.put("/:holidayId", async (req, res) => {
   let { name, date, day, type, notes, groupName } = req.body;
   if (groupName) {
     const normalized = groupName.toLowerCase().replace(/\s+/g, '');
-    if (normalized === 'bangaloreuandwelabs' || normalized === 'bangaloreuandwe' || normalized === 'uandwebangalore') {
-      groupName = 'BangaloreUANDWE';
-    }
+    // Removed hardcoded logic
   }
   const driver = getDriver();
   const session = driver.session();
   try {
     const result = await session.run(
-      `MATCH (g:Group {name: $groupName})-[:HAS_HOLIDAY]->(h:Holiday {id: $holidayId})
+      `MATCH (h:Holiday {id: $holidayId})
+       OPTIONAL MATCH (oldG:Group)-[r:HAS_HOLIDAY]->(h)
+       DELETE r
+       WITH h
+       MERGE (newG:Group {name: $groupName})
+       MERGE (newG)-[:HAS_HOLIDAY]->(h)
        SET h.name = $name, h.date = $date, h.day = $day, h.type = $type, h.notes = $notes
        RETURN h.id AS holidayId`,
       { holidayId, groupName, name, date, day, type, notes: notes || "" }
@@ -410,6 +458,61 @@ router.delete("/:holidayId", async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   } finally {
     await deleteSession.close();
+  }
+});
+
+// Create new company
+router.post("/companies/add", async (req, res) => {
+  const { name, location, client, country } = req.body;
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    await session.run(
+      `MERGE (g:Group {name: $name})
+       SET g.location = $location, g.client = $client, g.country = $country`,
+      { name, location: location || "", client: client || "", country: country || "" }
+    );
+    res.json({ success: true, message: "Company added successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// Update Shared Calendar Relationships
+router.post("/companies/share-holiday-calendar", async (req, res) => {
+  const { previousCompanies, newCompanies } = req.body;
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    const allToClear = [...new Set([...(previousCompanies || []), ...(newCompanies || [])])];
+    
+    // Clear relationships for all involved nodes
+    if (allToClear.length > 0) {
+      await session.run(`
+        UNWIND $companies AS comp
+        MATCH (g:Group {name: comp})-[r:SHARES_HOLIDAY_CALENDAR]-()
+        DELETE r
+      `, { companies: allToClear });
+    }
+    
+    // Create chain relationships for newCompanies
+    if (newCompanies && newCompanies.length > 1) {
+      for (let i = 0; i < newCompanies.length - 1; i++) {
+        await session.run(`
+          MERGE (g1:Group {name: $c1})
+          MERGE (g2:Group {name: $c2})
+          MERGE (g1)-[:SHARES_HOLIDAY_CALENDAR]->(g2)
+        `, { c1: newCompanies[i], c2: newCompanies[i+1] });
+      }
+    }
+    
+    res.json({ success: true, message: "Calendar sharing updated" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    await session.close();
   }
 });
 
