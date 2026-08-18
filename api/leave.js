@@ -13,11 +13,11 @@ const upload = multer({
 const DEFAULT_ANNUAL_LEAVE = 11;
 
 // Helper to calculate leave balance stats
-const calculateBalances = (leaves, nationality) => {
-  let wfhUsed = 0;
-  let rawAnnualUsed = 0;
+const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
+  let wfhUsed = priorLeaves.priorWfhUsed || 0;
+  let rawAnnualUsed = priorLeaves.priorAnnualUsed || 0;
   let pendingAnnual = 0;
-  let rawSickUsed = 0;
+  let rawSickUsed = priorLeaves.priorSickUsed || 0;
   let pendingSick = 0;
 
   const currentMonth = new Date().getMonth();
@@ -135,11 +135,25 @@ router.get("/user/:userId", async (req, res) => {
       return l;
     });
 
-    const pdResult = await session.run(`MATCH (p:PersonalDetails {userId: $userId}) RETURN p.nationality as nationality`, { userId });
+    const pdResult = await session.run(`
+      MATCH (u:User {username: $userId})
+      OPTIONAL MATCH (p:PersonalDetails {userId: $userId})
+      OPTIONAL MATCH (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
+      RETURN p.nationality as nationality, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed
+    `, { userId });
+    
     let nationality = '';
-    if (pdResult.records.length > 0) nationality = pdResult.records[0].get('nationality');
+    let priorLeaves = { priorAnnualUsed: 0, priorSickUsed: 0, priorWfhUsed: 0 };
+    if (pdResult.records.length > 0) {
+      nationality = pdResult.records[0].get('nationality') || '';
+      priorLeaves = {
+        priorAnnualUsed: parseFloat(pdResult.records[0].get('priorAnnualUsed')) || 0,
+        priorSickUsed: parseFloat(pdResult.records[0].get('priorSickUsed')) || 0,
+        priorWfhUsed: parseFloat(pdResult.records[0].get('priorWfhUsed')) || 0
+      };
+    }
 
-    const balances = calculateBalances(leaves, nationality);
+    const balances = calculateBalances(leaves, nationality, priorLeaves);
 
     res.json({
       success: true,
@@ -195,12 +209,26 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       RETURN l
     `, { userId });
     
-    const pdResult = await session.run(`MATCH (p:PersonalDetails {userId: $userId}) RETURN p.nationality as nationality`, { userId });
+    const pdResult = await session.run(`
+      MATCH (u:User {username: $userId})
+      OPTIONAL MATCH (p:PersonalDetails {userId: $userId})
+      OPTIONAL MATCH (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
+      RETURN p.nationality as nationality, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed
+    `, { userId });
+    
     let nationality = '';
-    if (pdResult.records.length > 0) nationality = pdResult.records[0].get('nationality');
+    let priorLeaves = { priorAnnualUsed: 0, priorSickUsed: 0, priorWfhUsed: 0 };
+    if (pdResult.records.length > 0) {
+      nationality = pdResult.records[0].get('nationality') || '';
+      priorLeaves = {
+        priorAnnualUsed: parseFloat(pdResult.records[0].get('priorAnnualUsed')) || 0,
+        priorSickUsed: parseFloat(pdResult.records[0].get('priorSickUsed')) || 0,
+        priorWfhUsed: parseFloat(pdResult.records[0].get('priorWfhUsed')) || 0
+      };
+    }
 
     const existingLeaves = existingResult.records.map(record => record.get('l').properties);
-    const balances = calculateBalances(existingLeaves, nationality);
+    const balances = calculateBalances(existingLeaves, nationality, priorLeaves);
 
     // WFH 1-per-week validation
     if (leaveType === 'Work From Home' && ['UANDWE Bangalore', 'BangaloreUANDWE', 'bangaloreuandwelabs', 'BangaloreUANDWELabs', 'bangaloreuandwe labs'].includes(company)) {
@@ -248,7 +276,9 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
     const isLOP = lopDays > 0;
     const salaryDeductionPercentage = lopDays * 2;
 
-    const leaveId = crypto.randomUUID();
+    const countResult = await session.run('MATCH (l:LeaveRequest) RETURN count(l) as c');
+    const currentCount = countResult.records[0].get('c').toNumber();
+    const leaveId = `leave_${currentCount + 1}_${employeeNumber}`;
     const createdAt = new Date().toISOString();
     
     // Check if requester supervises any team
@@ -346,7 +376,7 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
   }
 });
 
-// 3. Get all leaves (Admin view)
+// 3. Get all leaves for HR/Admin
 router.get("/all", async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
@@ -374,6 +404,142 @@ router.get("/all", async (req, res) => {
   } catch (error) {
     console.error("Error fetching all leaves:", error);
     res.status(500).json({ success: false, message: "Failed to fetch leaves" });
+  } finally {
+    await session.close();
+  }
+});
+
+// Admin Route to adjust prior leaves
+router.put("/admin/user/:userId/prior-leaves", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { userId } = req.params;
+  const { priorAnnualUsed, priorSickUsed, priorWfhUsed } = req.body;
+
+  try {
+    const result = await session.run(`
+      MATCH (u:User {username: $userId})
+      MERGE (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
+      SET lb.priorAnnualUsed = $priorAnnualUsed,
+          lb.priorSickUsed = $priorSickUsed,
+          lb.priorWfhUsed = $priorWfhUsed
+      RETURN lb
+    `, { 
+      userId, 
+      priorAnnualUsed: parseFloat(priorAnnualUsed) || 0,
+      priorSickUsed: parseFloat(priorSickUsed) || 0,
+      priorWfhUsed: parseFloat(priorWfhUsed) || 0
+    });
+
+    if (result.records.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.json({ success: true, message: "Prior leaves updated successfully." });
+  } catch (error) {
+    console.error("Error updating prior leaves:", error);
+    res.status(500).json({ success: false, message: "Failed to update prior leaves." });
+  } finally {
+    await session.close();
+  }
+});
+
+// Admin Route to log a past leave directly as Approved
+router.post("/admin/user/:userId/past-leave", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { userId } = req.params;
+  const { 
+    employeeName, employeeNumber, company, 
+    leaveType, startDate, endDate, 
+    totalDays, reason 
+  } = req.body;
+
+  try {
+    if (!userId || !startDate || !endDate || !leaveType) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const countResult = await session.run('MATCH (l:LeaveRequest) RETURN count(l) as c');
+    const currentCount = countResult.records[0].get('c').toNumber();
+    const leaveId = `leave_${currentCount + 1}_${employeeNumber}`;
+    const createdAt = new Date().toISOString();
+
+    const result = await session.run(`
+      MATCH (u:User {username: $userId})
+      CREATE (l:LeaveRequest {
+        id: $id,
+        userId: $userId,
+        employeeName: $employeeName,
+        employeeNumber: $employeeNumber,
+        company: $company,
+        leaveType: $leaveType,
+        startDate: $startDate,
+        startTime: '09:00',
+        endDate: $endDate,
+        endTime: '18:00',
+        totalDays: $totalDays,
+        actualUsedDays: $totalDays,
+        annualLeaveDays: 0,
+        lopDays: 0,
+        reason: $reason,
+        customReason: 'Logged by Admin',
+        status: 'Approved',
+        supervisorStatus: 'Approved',
+        hrStatus: 'Approved',
+        createdAt: $createdAt
+      })
+      CREATE (u)-[:APPLIED_FOR]->(l)
+      RETURN l
+    `, {
+      id: leaveId,
+      userId,
+      employeeName: employeeName || '',
+      employeeNumber: employeeNumber || '',
+      company: company || '',
+      leaveType,
+      startDate,
+      endDate,
+      totalDays: parseFloat(totalDays) || 0,
+      reason: reason || 'Past leave logged by admin',
+      createdAt
+    });
+
+    if (result.records.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.json({ success: true, message: "Past leave logged successfully.", data: result.records[0].get('l').properties });
+  } catch (error) {
+    console.error("Error logging past leave:", error);
+    res.status(500).json({ success: false, message: "Failed to log past leave." });
+  } finally {
+    await session.close();
+  }
+});
+
+// Admin Route to fetch all prior leaves
+router.get("/balances", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    const result = await session.run(`
+      MATCH (u:User)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
+      RETURN u.username as userId, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed
+    `);
+
+    const balances = result.records.map(record => ({
+      userId: record.get('userId'),
+      priorAnnualUsed: record.get('priorAnnualUsed') || 0,
+      priorSickUsed: record.get('priorSickUsed') || 0,
+      priorWfhUsed: record.get('priorWfhUsed') || 0
+    }));
+
+    res.json({ success: true, data: balances });
+  } catch (error) {
+    console.error("Error fetching leave balances:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch balances" });
   } finally {
     await session.close();
   }
