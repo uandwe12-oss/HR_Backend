@@ -431,6 +431,38 @@ const formatProfileForResponse = (profile) => {
 // CANDIDATE ROUTES
 // ============================================
 
+// GET autocomplete options for Add Profile Modal
+router.get("/autocomplete-options", async (req, res) => {
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+  const session = driver.session();
+  try {
+    const result = await session.run(`
+      MATCH (c:Candidate_Profile)
+      RETURN 
+        collect(DISTINCT c.\`Client Name\`) as clientNames,
+        collect(DISTINCT c.\`Current Org\`) as currentOrgs,
+        collect(DISTINCT c.\`Profiles sourced by\`) as profileSourcedBys
+    `);
+
+    if (result.records.length === 0) {
+      return res.json({ success: true, data: { clientNames: [], currentOrgs: [], profileSourcedBys: [] } });
+    }
+
+    const record = result.records[0];
+    const clientNames = (record.get('clientNames') || []).filter(v => v && v.trim() !== '').sort();
+    const currentOrgs = (record.get('currentOrgs') || []).filter(v => v && v.trim() !== '').sort();
+    const profileSourcedBys = (record.get('profileSourcedBys') || []).filter(v => v && v.trim() !== '').sort();
+
+    res.json({ success: true, data: { clientNames, currentOrgs, profileSourcedBys } });
+  } catch (error) {
+    console.error("Error fetching autocomplete options:", error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.close();
+  }
+});
 
 router.get("/", async (req, res) => {
 
@@ -489,11 +521,35 @@ router.get("/all", async (req, res) => {
   const session = driver.session();
   const page = req.query.page ? parseInt(req.query.page) : null;
   const limit = req.query.limit ? parseInt(req.query.limit) : null;
+  const search = req.query.search ? req.query.search.trim().toLowerCase() : null;
+  const sortBy = req.query.sortBy || 'id';
+  const sortOrder = req.query.sortOrder === 'asc' ? 'ASC' : 'DESC';
 
   try {
     let profiles = [];
     let totalRecords = 0;
     
+    const searchCondition = search ? `
+      AND (
+        toLower(c.\`Candidate Name\`) CONTAINS $search OR 
+        toLower(c.name) CONTAINS $search OR 
+        toLower(c.candidateName) CONTAINS $search OR 
+        toLower(c.Email) CONTAINS $search OR
+        toLower(c.email) CONTAINS $search OR
+        toLower(c.\`Mobile No\`) CONTAINS $search OR
+        toLower(c.mobile) CONTAINS $search
+      )
+    ` : '';
+
+    let orderClause = `ORDER BY c.Can_ID ${sortOrder}`;
+    if (sortBy === 'name') {
+      orderClause = `ORDER BY toLower(coalesce(c.\`Candidate Name\`, c.name, c.candidateName, '')) ${sortOrder}, c.Can_ID DESC`;
+    } else if (sortBy === 'mobile') {
+      orderClause = `ORDER BY coalesce(c.\`Mobile No\`, c.mobile, '') ${sortOrder}, c.Can_ID DESC`;
+    } else if (search) {
+      orderClause = `ORDER BY (toLower(coalesce(c.\`Candidate Name\`, c.name, c.candidateName, '')) CONTAINS $search) DESC, c.Can_ID DESC`;
+    }
+
     if (page && limit) {
       const skip = (page - 1) * limit;
       
@@ -504,8 +560,9 @@ router.get("/all", async (req, res) => {
           MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c)
           WHERE r.status = 'Joined'
         }
+        ${searchCondition}
         RETURN count(c) as total
-      `);
+      `, { search });
       totalRecords = toNumber(countResult.records[0].get('total'));
 
       const result = await session.run(
@@ -514,8 +571,9 @@ router.get("/all", async (req, res) => {
            MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c)
            WHERE r.status = 'Joined'
          }
-         RETURN c ORDER BY c.Can_ID DESC SKIP $skip LIMIT $limit`,
-        { skip: neo4j.int(skip), limit: neo4j.int(limit) }
+         ${searchCondition}
+         RETURN c ${orderClause} SKIP $skip LIMIT $limit`,
+        { skip: neo4j.int(skip), limit: neo4j.int(limit), search }
       );
 
       for (const record of result.records) {
