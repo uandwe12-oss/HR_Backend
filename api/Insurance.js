@@ -1,4 +1,3 @@
-
 const express = require("express");
 const router = express.Router();
 const getDriver = require("../lib/neo4j");
