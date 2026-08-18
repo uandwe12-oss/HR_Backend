@@ -54,17 +54,21 @@ router.get("/user/:userId", async (req, res) => {
 
     // B. Fetch Holidays for this client
     let holidays = [];
-    if (client) {
-      const holidayResult = await session.run(`
-        MATCH (g:Group {name: $client})-[:HAS_HOLIDAY]->(h:Holiday)
-        WHERE h.date STARTS WITH $monthPrefix
-        RETURN h.date AS date, h.name AS name
-      `, { client, monthPrefix: monthParam });
-      holidays = holidayResult.records.map(r => ({
-        date: r.get("date"),
-        name: r.get("name")
-      }));
-    }
+    let queryClient = client || "UANDWE"; // Default to company if no client assigned
+
+    const holidayResult = await session.run(`
+      MATCH (g:Group {name: $client})
+      OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
+      WITH DISTINCT linkedGroup
+      MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
+      WHERE h.date STARTS WITH $monthPrefix
+      RETURN h.date AS date, h.name AS name
+    `, { client: queryClient, monthPrefix: monthParam });
+    
+    holidays = holidayResult.records.map(r => ({
+      date: r.get("date"),
+      name: r.get("name")
+    }));
 
     // C. Fetch Approved Leaves for this user in this month
     const leaveResult = await session.run(`
