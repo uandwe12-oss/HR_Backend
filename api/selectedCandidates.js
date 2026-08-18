@@ -1,43 +1,43 @@
-  const express = require("express");
-  const router = express.Router();
-  const axios = require('axios');
-  // Import the shared driver helper
-  const getDriver = require("../lib/neo4j");
+const express = require("express");
+const router = express.Router();
+const axios = require('axios');
+// Import the shared driver helper
+const getDriver = require("../lib/neo4j");
 
-  // Helper function to parse skills
-  const parseKeySkills = (skills) => {
-    if (!skills) return [];
-    if (Array.isArray(skills)) return skills;
-    if (typeof skills === 'string') {
-      try {
-        const parsed = JSON.parse(skills);
-        return Array.isArray(parsed) ? parsed : [parsed];
-      } catch {
-        return skills.split(',').map(s => s.trim()).filter(s => s);
-      }
-    }
-    return [];
-  };
-
-  // Helper function to convert Neo4j integer to number
-  const toNumber = (value) => {
-    if (value === null || value === undefined) return value;
-    if (typeof value === 'object' && value.low !== undefined) {
-      return value.toNumber ? value.toNumber() : value.low;
-    }
-    return value;
-  };
-
-  // Add to Zone function
-  const addToZone = async (driver, candidateId, demandId, clientName, status, reason, changedBy) => {
-    const session = driver.session();
-
+// Helper function to parse skills
+const parseKeySkills = (skills) => {
+  if (!skills) return [];
+  if (Array.isArray(skills)) return skills;
+  if (typeof skills === 'string') {
     try {
-      // console.log(`\n🔍 Checking if candidate ${candidateId} already in zone for client ${clientName}`);
+      const parsed = JSON.parse(skills);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      return skills.split(',').map(s => s.trim()).filter(s => s);
+    }
+  }
+  return [];
+};
+
+// Helper function to convert Neo4j integer to number
+const toNumber = (value) => {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'object' && value.low !== undefined) {
+    return value.toNumber ? value.toNumber() : value.low;
+  }
+  return value;
+};
+
+// Add to Zone function
+const addToZone = async (driver, candidateId, demandId, clientName, status, reason, changedBy) => {
+  const session = driver.session();
+
+  try {
+    // console.log(`\n🔍 Checking if candidate ${candidateId} already in zone for client ${clientName}`);
 
 
-      // Check if candidate already has ANY zone entry for this client
-      const existingCheck = await session.run(`
+    // Check if candidate already has ANY zone entry for this client
+    const existingCheck = await session.run(`
       MATCH (z:Zone)
   WHERE toFloat(z.candidateId) = toFloat($candidateId)
   AND toLower(trim(z.clientName)) = toLower(trim($clientName))
@@ -46,34 +46,34 @@
   ORDER BY z.createdAt DESC
   LIMIT 1
       `, {
-        candidateId: parseInt(candidateId),
-        clientName: clientName
+      candidateId: parseInt(candidateId),
+      clientName: clientName
+    });
+
+
+
+    const now = new Date();
+    const expiryDate = new Date(now);
+    expiryDate.setMonth(expiryDate.getMonth() + 6);
+
+    if (existingCheck.records.length > 0) {
+      // UPDATE existing entry
+      const existingZone = existingCheck.records[0].get('z').properties;
+
+      // Create previous rejection as a JSON string (not a map/object)
+      const previousRejection = JSON.stringify({
+        demandId: toNumber(existingZone.demandId),
+        status: existingZone.rejectedStatus,
+        rejectedAt: existingZone.rejectedAt,
+        expiryDate: existingZone.expiryDate,
+        reason: existingZone.reason
       });
 
-    
+      // console.log(`🔄 Updating existing zone entry for candidate ${candidateId} with client ${clientName}`);
+      // console.log(`   Old status: ${existingZone.rejectedStatus}, New status: ${status}`);
+      // console.log(`   Old demand: ${existingZone.demandId}, New demand: ${demandId}`);
 
-      const now = new Date();
-      const expiryDate = new Date(now);
-      expiryDate.setMonth(expiryDate.getMonth() + 6);
-
-      if (existingCheck.records.length > 0) {
-        // UPDATE existing entry
-        const existingZone = existingCheck.records[0].get('z').properties;
-
-        // Create previous rejection as a JSON string (not a map/object)
-        const previousRejection = JSON.stringify({
-          demandId: toNumber(existingZone.demandId),
-          status: existingZone.rejectedStatus,
-          rejectedAt: existingZone.rejectedAt,
-          expiryDate: existingZone.expiryDate,
-          reason: existingZone.reason
-        });
-
-        // console.log(`🔄 Updating existing zone entry for candidate ${candidateId} with client ${clientName}`);
-        // console.log(`   Old status: ${existingZone.rejectedStatus}, New status: ${status}`);
-        // console.log(`   Old demand: ${existingZone.demandId}, New demand: ${demandId}`);
-
-        await session.run(`
+      await session.run(`
         MATCH (z:Zone)
   WHERE toFloat(z.candidateId) = toFloat($candidateId)
   AND toLower(trim(z.clientName)) = toLower(trim($clientName))
@@ -87,28 +87,28 @@
               z.updatedAt = $updatedAt,
               z.previousRejection = $previousRejection
         `, {
-          candidateId: parseInt(candidateId),
-          clientName: clientName,
-          
-          demandId: demandId ? parseInt(demandId) : null,
-          
-          status: status,
-          reason: reason || `Rejected with status: ${status}`,
-          rejectedBy: changedBy,
-          rejectedAt: now.toISOString(),
-          expiryDate: expiryDate.toISOString(),
-          updatedAt: now.toISOString(),
-          previousRejection: previousRejection  // Store as JSON string
-        });
+        candidateId: parseInt(candidateId),
+        clientName: clientName,
 
-        console.log(`✅ Updated existing zone entry for candidate ${candidateId}`);
-        console.log("EXISTING CHECK COUNT:", existingCheck.records.length);
-        return true;
-      } else {
-        // CREATE new entry
-        // console.log(`✨ Creating new zone entry for candidate ${candidateId} with client ${clientName}`);
+        demandId: demandId ? parseInt(demandId) : null,
 
-        await session.run(`
+        status: status,
+        reason: reason || `Rejected with status: ${status}`,
+        rejectedBy: changedBy,
+        rejectedAt: now.toISOString(),
+        expiryDate: expiryDate.toISOString(),
+        updatedAt: now.toISOString(),
+        previousRejection: previousRejection  // Store as JSON string
+      });
+
+      console.log(`✅ Updated existing zone entry for candidate ${candidateId}`);
+      console.log("EXISTING CHECK COUNT:", existingCheck.records.length);
+      return true;
+    } else {
+      // CREATE new entry
+      // console.log(`✨ Creating new zone entry for candidate ${candidateId} with client ${clientName}`);
+
+      await session.run(`
           CREATE (z:Zone {
             candidateId: $candidateId,
             demandId: $demandId,
@@ -122,95 +122,95 @@
             updatedAt: $createdAt
           })
         `, {
-          candidateId: parseInt(candidateId),
-          demandId: demandId ? parseInt(demandId) : null,
-          clientName: clientName,
-          status: status,
-          reason: reason || `Rejected with status: ${status}`,
-          rejectedBy: changedBy,
-          rejectedAt: now.toISOString(),
-          expiryDate: expiryDate.toISOString(),
-          createdAt: now.toISOString()
-        });
+        candidateId: parseInt(candidateId),
+        demandId: demandId ? parseInt(demandId) : null,
+        clientName: clientName,
+        status: status,
+        reason: reason || `Rejected with status: ${status}`,
+        rejectedBy: changedBy,
+        rejectedAt: now.toISOString(),
+        expiryDate: expiryDate.toISOString(),
+        createdAt: now.toISOString()
+      });
 
-        console.log(`✅ Created new zone entry for candidate ${candidateId}`);
-        return true;
-      }
-    } catch (err) {
-      console.error(`❌ Error adding/updating zone:`, err);
-      return false;
-    } finally {
+      console.log(`✅ Created new zone entry for candidate ${candidateId}`);
+      return true;
+    }
+  } catch (err) {
+    console.error(`❌ Error adding/updating zone:`, err);
+    return false;
+  } finally {
+    await session.close();
+  }
+};
+
+/**
+ * POST /api/selected-candidates/:demandId
+ * Save selected candidates for a demand
+ */
+router.post("/:demandId", async (req, res) => {
+  const { demandId } = req.params;
+  const { candidates, selectedBy } = req.body;
+
+  // console.log(`\n📡 POST /api/selected-candidates/${demandId} - Saving candidates`);
+
+  if (!demandId) {
+    return res.status(400).json({ success: false, message: "Demand ID is required" });
+  }
+
+  let candidatesArray = candidates;
+  if (!Array.isArray(candidates)) {
+    candidatesArray = [candidates];
+  }
+
+  if (!candidatesArray || candidatesArray.length === 0) {
+    return res.status(400).json({ success: false, message: "Candidates are required" });
+  }
+
+  let driver;
+  try {
+    driver = getDriver();
+    const session = driver.session();
+
+    // Check if demand exists
+    const demandCheck = await session.run(
+      "MATCH (d:Demand {id: $demandId}) RETURN d",
+      { demandId: parseInt(demandId) }
+    );
+
+    if (demandCheck.records.length === 0) {
       await session.close();
-    }
-  };
-
-  /**
-   * POST /api/selected-candidates/:demandId
-   * Save selected candidates for a demand
-   */
-  router.post("/:demandId", async (req, res) => {
-    const { demandId } = req.params;
-    const { candidates, selectedBy } = req.body;
-
-    // console.log(`\n📡 POST /api/selected-candidates/${demandId} - Saving candidates`);
-
-    if (!demandId) {
-      return res.status(400).json({ success: false, message: "Demand ID is required" });
+      return res.status(404).json({
+        success: false,
+        message: `Demand with ID ${demandId} not found`
+      });
     }
 
-    let candidatesArray = candidates;
-    if (!Array.isArray(candidates)) {
-      candidatesArray = [candidates];
-    }
+    // Process each candidate
+    for (const candidate of candidatesArray) {
+      const canId = candidate.canId || candidate.actualId || candidate.id;
 
-    if (!candidatesArray || candidatesArray.length === 0) {
-      return res.status(400).json({ success: false, message: "Candidates are required" });
-    }
-
-    let driver;
-    try {
-      driver = getDriver();
-      const session = driver.session();
-
-      // Check if demand exists
-      const demandCheck = await session.run(
-        "MATCH (d:Demand {id: $demandId}) RETURN d",
-        { demandId: parseInt(demandId) }
-      );
-
-      if (demandCheck.records.length === 0) {
-        await session.close();
-        return res.status(404).json({
-          success: false,
-          message: `Demand with ID ${demandId} not found`
-        });
+      if (!canId) {
+        console.warn("Candidate missing ID:", candidate);
+        continue;
       }
 
-      // Process each candidate
-      for (const candidate of candidatesArray) {
-        const canId = candidate.canId || candidate.actualId || candidate.id;
+      console.log(`Processing candidate with Can_ID: ${canId}`);
 
-        if (!canId) {
-          console.warn("Candidate missing ID:", candidate);
-          continue;
-        }
+      const now = new Date().toISOString();
+      const selectedByName = selectedBy || 'Unknown';
 
-        console.log(`Processing candidate with Can_ID: ${canId}`);
+      // Create history entry for selection
+      const historyEntry = {
+        action: 'SELECTED',
+        status: 'In Progress',
+        changedBy: selectedByName,
+        changedAt: now,
+        reason: 'Candidate selected for demand'
+      };
 
-        const now = new Date().toISOString();
-        const selectedByName = selectedBy || 'Unknown';
-
-        // Create history entry for selection
-        const historyEntry = {
-          action: 'SELECTED',
-          status: 'In Progress',
-          changedBy: selectedByName,
-          changedAt: now,
-          reason: 'Candidate selected for demand'
-        };
-
-        // Create or update the relationship with history array
-        await session.run(`
+      // Create or update the relationship with history array
+      await session.run(`
           MATCH (d:Demand {id: $demandId})
           MATCH (c:Candidate_Profile {Can_ID: $canId})
           MERGE (d)-[r:HAS_SELECTED_CANDIDATE]->(c)
@@ -220,173 +220,69 @@
               r.history = $history,
               r.updatedAt = $selectedAt
         `, {
-          demandId: demandId ? parseInt(demandId) : null,
-          canId: parseInt(canId),
-          selectedAt: now,
-          selectedBy: selectedByName,
-          status: 'In Progress',
-          history: JSON.stringify([historyEntry]) // Store as JSON array
-        });
-      }
+        demandId: demandId ? parseInt(demandId) : null,
+        canId: parseInt(canId),
+        selectedAt: now,
+        selectedBy: selectedByName,
+        status: 'In Progress',
+        history: JSON.stringify([historyEntry]) // Store as JSON array
+      });
+    }
 
-      // Count total selected candidates
-      const countResult = await session.run(`
+    // Count total selected candidates
+    const countResult = await session.run(`
         MATCH (d:Demand {id: $demandId})-[:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile)
         RETURN count(c) as count
       `, { demandId: parseInt(demandId) });
 
-      const count = countResult.records[0].get('count').low || countResult.records[0].get('count');
+    const count = countResult.records[0].get('count').low || countResult.records[0].get('count');
 
-      await session.close();
+    await session.close();
 
-      res.json({
-        success: true,
-        message: `Successfully saved candidates for demand ${demandId}`,
-        count: count
-      });
+    res.json({
+      success: true,
+      message: `Successfully saved candidates for demand ${demandId}`,
+      count: count
+    });
 
-    } catch (err) {
-      console.error("❌ Error saving selected candidates:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to save selected candidates",
-        error: err.message
-      });
-    }
-  });
+  } catch (err) {
+    console.error("❌ Error saving selected candidates:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to save selected candidates",
+      error: err.message
+    });
+  }
+});
 
-  /**
-   * GET /api/selected-candidates/:demandId
-   * Get selected candidates for a demand with full history
-   */
-  router.get("/:demandId", async (req, res) => {
-    const { demandId } = req.params;
+/**
+ * GET /api/selected-candidates/:demandId
+ * Get selected candidates for a demand with full history
+ */
+router.get("/:demandId", async (req, res) => {
+  const { demandId } = req.params;
 
 
 
-    if (!demandId) {
-      return res.status(400).json({ success: false, message: "Demand ID is required" });
-    }
+  if (!demandId) {
+    return res.status(400).json({ success: false, message: "Demand ID is required" });
+  }
 
-    const driver = getDriver();
-    const session = driver.session();
+  const driver = getDriver();
+  const session = driver.session();
 
-    try {
-      const result = await session.run(`
+  try {
+    const result = await session.run(`
         MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile)
         RETURN c, r
         ORDER BY r.selectedAt DESC
       `, { demandId: parseInt(demandId) });
 
-      const candidates = result.records.map(record => {
-        const candidate = record.get('c').properties;
-        const relationship = record.get('r').properties;
+    const candidates = result.records.map(record => {
+      const candidate = record.get('c').properties;
+      const relationship = record.get('r').properties;
 
-        // Parse history - it's stored as JSON string
-        let history = [];
-        if (relationship.history) {
-          try {
-            history = typeof relationship.history === 'string'
-              ? JSON.parse(relationship.history)
-              : relationship.history;
-          } catch (e) {
-            console.error("Error parsing history:", e);
-            history = [];
-          }
-        }
-
-        return {
-          // Candidate basic info (what you want to show)
-          id: candidate.Can_ID,
-          name: candidate['Candidate Name'] || '',
-          resumePath: candidate.resumePath || '',
-          googleDriveViewLink: candidate.googleDriveViewLink || '',
-
-          // Who added them and when
-          selectedBy: relationship.selectedBy,
-          selectedAt: relationship.selectedAt,
-
-          // Current status
-          status: relationship.status || 'In Progress',
-
-          // Full history of all actions
-          history: history,
-
-          // Additional fields if needed for display
-          email: candidate.Email || '',
-          mobile: candidate['Mobile No'] || '',
-          experience: candidate.Experience || '',
-          currentOrg: candidate['Current Org'] || '',
-          keySkills: parseKeySkills(candidate['Key Skills'])
-        };
-      });
-
-      // console.log(`✅ Found ${candidates.length} selected candidates for demand ${demandId}`);
-
-      res.json({
-        success: true,
-        data: candidates,
-        totalCount: candidates.length,
-        demandId: demandId
-      });
-
-    } catch (err) {
-      console.error("❌ Error fetching selected candidates:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to fetch selected candidates",
-        error: err.message
-      });
-    } finally {
-      await session.close();
-    }
-  });
-
-  /**
-   * PUT /api/selected-candidates/status
-   * Update candidate status with reason and track who did it (WITH ZONE INTEGRATION)
-   */
-  router.put("/status", async (req, res) => {
-    const { candidateId, demandId, status, reason, changedBy } = req.body;
-
-    // console.log(`\n📡 PUT /api/selected-candidates/status - Updating candidate ${candidateId} to ${status}`);
-    // console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
-
-    if (!candidateId || !demandId || !status) {
-      return res.status(400).json({
-        success: false,
-        message: "candidateId, demandId, and status are required"
-      });
-    }
-
-    const driver = getDriver();
-    const session = driver.session();
-
-    try {
-      // First get the current relationship to get existing history and demand details
-      const getResult = await session.run(`
-        MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile {Can_ID: $candidateId})
-        RETURN r, d
-      `, {
-        demandId: demandId ? parseInt(demandId) : null,
-        candidateId: parseInt(candidateId)
-      });
-
-      if (!getResult.records.length) {
-        return res.status(404).json({
-          success: false,
-          message: "Candidate not found for this demand"
-        });
-      }
-
-      const relationship = getResult.records[0].get('r').properties;
-      const demand = getResult.records[0].get('d').properties;
-      const clientName = demand.client || demand.clientName || demand.ClientName;
-
-  // console.log("DEMAND OBJECT:", demand);
-  // console.log("CLIENT NAME VALUE:", clientName);
-
-      // Parse existing history
+      // Parse history - it's stored as JSON string
       let history = [];
       if (relationship.history) {
         try {
@@ -394,28 +290,132 @@
             ? JSON.parse(relationship.history)
             : relationship.history;
         } catch (e) {
+          console.error("Error parsing history:", e);
           history = [];
         }
       }
 
-      // Create new history entry for this status change
-      const now = new Date().toISOString();
-      const changedByName = changedBy || relationship.selectedBy || 'Unknown';
+      return {
+        // Candidate basic info (what you want to show)
+        id: candidate.Can_ID,
+        name: candidate['Candidate Name'] || '',
+        resumePath: candidate.resumePath || '',
+        googleDriveViewLink: candidate.googleDriveViewLink || '',
 
-      const historyEntry = {
-        action: 'STATUS_CHANGED',
-        fromStatus: relationship.status || 'In Progress',
-        toStatus: status,
-        changedBy: changedByName,
-        changedAt: now,
-        reason: reason || `Status changed to ${status}`
+        // Who added them and when
+        selectedBy: relationship.selectedBy,
+        selectedAt: relationship.selectedAt,
+
+        // Current status
+        status: relationship.status || 'In Progress',
+
+        // Full history of all actions
+        history: history,
+
+        // Additional fields if needed for display
+        email: candidate.Email || '',
+        mobile: candidate['Mobile No'] || '',
+        experience: candidate.Experience || '',
+        currentOrg: candidate['Current Org'] || '',
+        keySkills: parseKeySkills(candidate['Key Skills'])
       };
+    });
 
-      // Add to history array
-      history.push(historyEntry);
+    // console.log(`✅ Found ${candidates.length} selected candidates for demand ${demandId}`);
 
-      // Update the relationship with new status and history
-  const updateResult = await session.run(`
+    res.json({
+      success: true,
+      data: candidates,
+      totalCount: candidates.length,
+      demandId: demandId
+    });
+
+  } catch (err) {
+    console.error("❌ Error fetching selected candidates:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch selected candidates",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * PUT /api/selected-candidates/status
+ * Update candidate status with reason and track who did it (WITH ZONE INTEGRATION)
+ */
+router.put("/status", async (req, res) => {
+  const { candidateId, demandId, status, reason, changedBy } = req.body;
+
+  // console.log(`\n📡 PUT /api/selected-candidates/status - Updating candidate ${candidateId} to ${status}`);
+  // console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
+
+  if (!candidateId || !demandId || !status) {
+    return res.status(400).json({
+      success: false,
+      message: "candidateId, demandId, and status are required"
+    });
+  }
+
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    // First get the current relationship to get existing history and demand details
+    const getResult = await session.run(`
+        MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile {Can_ID: $candidateId})
+        RETURN r, d
+      `, {
+      demandId: demandId ? parseInt(demandId) : null,
+      candidateId: parseInt(candidateId)
+    });
+
+    if (!getResult.records.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Candidate not found for this demand"
+      });
+    }
+
+    const relationship = getResult.records[0].get('r').properties;
+    const demand = getResult.records[0].get('d').properties;
+    const clientName = demand.client || demand.clientName || demand.ClientName;
+
+    // console.log("DEMAND OBJECT:", demand);
+    // console.log("CLIENT NAME VALUE:", clientName);
+
+    // Parse existing history
+    let history = [];
+    if (relationship.history) {
+      try {
+        history = typeof relationship.history === 'string'
+          ? JSON.parse(relationship.history)
+          : relationship.history;
+      } catch (e) {
+        history = [];
+      }
+    }
+
+    // Create new history entry for this status change
+    const now = new Date().toISOString();
+    const changedByName = changedBy || relationship.selectedBy || 'Unknown';
+
+    const historyEntry = {
+      action: 'STATUS_CHANGED',
+      fromStatus: relationship.status || 'In Progress',
+      toStatus: status,
+      changedBy: changedByName,
+      changedAt: now,
+      reason: reason || `Status changed to ${status}`
+    };
+
+    // Add to history array
+    history.push(historyEntry);
+
+    // Update the relationship with new status and history
+    const updateResult = await session.run(`
     MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile {Can_ID: $candidateId})
 
     SET r.status = $status,
@@ -425,359 +425,359 @@
 
     RETURN r, c
   `, {
-    demandId: demandId ? parseInt(demandId) : null,
-    candidateId: parseInt(candidateId),
-    status: status,
-    history: JSON.stringify(history),
-    updatedAt: now,
-    changedBy: changedByName
-  });
+      demandId: demandId ? parseInt(demandId) : null,
+      candidateId: parseInt(candidateId),
+      status: status,
+      history: JSON.stringify(history),
+      updatedAt: now,
+      changedBy: changedByName
+    });
 
-  // /console.log("UPDATE RESULT RECORDS:", updateResult.records.length);
+    // /console.log("UPDATE RESULT RECORDS:", updateResult.records.length);
 
-  if (updateResult.records.length > 0) {
-    console.log("✅ UPDATE SUCCESS");
-  } else {
-    console.log("❌ UPDATE FAILED");
-  }
+    if (updateResult.records.length > 0) {
+      console.log("✅ UPDATE SUCCESS");
+    } else {
+      console.log("❌ UPDATE FAILED");
+    }
 
-      const updatedRelationship = updateResult.records[0].get('r').properties;
-      const candidate = updateResult.records[0].get('c').properties;
+    const updatedRelationship = updateResult.records[0].get('r').properties;
+    const candidate = updateResult.records[0].get('c').properties;
 
 
 
-      // ✅ MOVED THIS INSIDE try block - UPDATE CANDIDATE'S isInProgress FLAG
-      const pendingStatuses = [
-        'In Progress',
-        'Pending Screening',
-        'Pending Interview',
-        'Pending Client Screening',
-        'Pending Client Interview',
-        'Pending Offer',
-        'Pending Joinee'
-      ];
+    // ✅ MOVED THIS INSIDE try block - UPDATE CANDIDATE'S isInProgress FLAG
+    const pendingStatuses = [
+      'In Progress',
+      'Pending Screening',
+      'Pending Interview',
+      'Pending Client Screening',
+      'Pending Client Interview',
+      'Pending Offer',
+      'Pending Joinee'
+    ];
 
-      const isInProgress = pendingStatuses.includes(status);
+    const isInProgress = pendingStatuses.includes(status);
+
+    try {
+      await axios.put(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/candidates/${candidateId}/progress`, {
+        isInProgress: isInProgress
+      });
+      console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
+    } catch (syncErr) {
+      console.error('⚠️ Failed to sync progress status:', syncErr.message);
+      // Don't fail the main request if sync fails
+    }
+
+    // ADD TO ZONE FOR REJECTION STATUSES
+    const rejectionStatuses = [
+      'Offer Decline',
+      'Interview Reject',
+      'Client Interview Reject',
+      'Screening Reject',
+      'Client Screening Reject'
+    ];
+
+    //   console.log("🔍 ZONE DEBUG START");
+    // console.log("Status received:", status);
+    // console.log("Client Name:", clientName);
+    // console.log("Candidate ID:", candidateId);
+    // console.log("Demand ID:", demandId);
+
+    // console.log("Rejection Statuses:", rejectionStatuses);
+
+    console.log(
+      "Includes Check:",
+      rejectionStatuses.includes(status)
+    );
+
+    console.log(
+      "Normalized Includes Check:",
+      rejectionStatuses
+        .map(s => s.toLowerCase())
+        .includes(String(status).trim().toLowerCase())
+    );
+
+    // console.log("STATUS TYPE:", typeof status);
+    // console.log("STATUS VALUE:", JSON.stringify(status));
+    // console.log(
+    //   "LOWERCASE MATCH:",
+    //   rejectionStatuses
+    //     .map(s => s.toLowerCase())
+    //     .includes(String(status).trim().toLowerCase())
+    // );
+
+    if (
+      rejectionStatuses
+        .map(s => s.toLowerCase())
+        .includes(String(status).trim().toLowerCase()) &&
+      clientName
+    ) {
+
+      // console.log("✅ ENTERED ZONE CONDITION");
 
       try {
-        await axios.put(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/candidates/${candidateId}/progress`, {
-          isInProgress: isInProgress
-        });
-        console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
-      } catch (syncErr) {
-        console.error('⚠️ Failed to sync progress status:', syncErr.message);
-        // Don't fail the main request if sync fails
-      }
+        const zoneResult = await addToZone(
+          driver,
+          candidateId,
+          demandId,
+          clientName,
+          status,
+          reason,
+          changedByName
+        );
 
-      // ADD TO ZONE FOR REJECTION STATUSES
-      const rejectionStatuses = [
-        'Offer Decline',
-        'Interview Reject',
-        'Client Interview Reject',
-        'Screening Reject',
-        'Client Screening Reject'
-      ];
+        console.log("ZONE RESULT:", zoneResult);
 
-  //   console.log("🔍 ZONE DEBUG START");
-  // console.log("Status received:", status);
-  // console.log("Client Name:", clientName);
-  // console.log("Candidate ID:", candidateId);
-  // console.log("Demand ID:", demandId);
-
-  // console.log("Rejection Statuses:", rejectionStatuses);
-
-  console.log(
-    "Includes Check:",
-    rejectionStatuses.includes(status)
-  );
-
-  console.log(
-    "Normalized Includes Check:",
-    rejectionStatuses
-      .map(s => s.toLowerCase())
-      .includes(String(status).trim().toLowerCase())
-  );
-
-  // console.log("STATUS TYPE:", typeof status);
-  // console.log("STATUS VALUE:", JSON.stringify(status));
-  // console.log(
-  //   "LOWERCASE MATCH:",
-  //   rejectionStatuses
-  //     .map(s => s.toLowerCase())
-  //     .includes(String(status).trim().toLowerCase())
-  // );
-
-  if (
-    rejectionStatuses
-      .map(s => s.toLowerCase())
-      .includes(String(status).trim().toLowerCase()) &&
-    clientName
-  ) {
-
-    // console.log("✅ ENTERED ZONE CONDITION");
-
-    try {
-      const zoneResult = await addToZone(
-        driver,
-        candidateId,
-        demandId,
-        clientName,
-        status,
-        reason,
-        changedByName
-      );
-
-      console.log("ZONE RESULT:", zoneResult);
-
-      if (zoneResult) {
-        console.log("✅ Zone updated successfully in Neo4j");
-      } else {
-        console.log("❌ Zone update returned false");
-      }
-
-    } catch (zoneErr) {
-      console.error("❌ ZONE ERROR:");
-      console.error(zoneErr);
-      console.error(zoneErr.message);
-      console.error(zoneErr.stack);
-    }
-
-  } else {
-    console.log("❌ DID NOT ENTER ZONE CONDITION");
-  }
-
-      // console.log(`✅ Candidate ${candidateId} status updated to ${status}`);
-
-      // Return updated info
-      res.json({
-        success: true,
-        message: `Candidate status updated to ${status}`,
-        data: {
-          id: candidate.Can_ID,
-          name: candidate['Candidate Name'] || '',
-          status: updatedRelationship.status,
-          selectedBy: updatedRelationship.selectedBy,
-          selectedAt: updatedRelationship.selectedAt,
-          history: history,
-          updatedAt: updatedRelationship.updatedAt,
-          updatedBy: updatedRelationship.updatedBy,
-          isInProgress: isInProgress, // ✅ Add this to response
-          // Add zone info if applicable
-          inZone: rejectionStatuses.includes(status) ? true : false,
-          zoneExpiry: rejectionStatuses.includes(status) ?
-            new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString() : null
+        if (zoneResult) {
+          console.log("✅ Zone updated successfully in Neo4j");
+        } else {
+          console.log("❌ Zone update returned false");
         }
-      });
 
-    } catch (err) {
-      console.error("❌ Error updating candidate status:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to update candidate status",
-        error: err.message
-      });
-    } finally {
-      await session.close();
+      } catch (zoneErr) {
+        console.error("❌ ZONE ERROR:");
+        console.error(zoneErr);
+        console.error(zoneErr.message);
+        console.error(zoneErr.stack);
+      }
+
+    } else {
+      console.log("❌ DID NOT ENTER ZONE CONDITION");
     }
-  })
 
-  /**
-   * DELETE /api/selected-candidates/demand/:demandId/all
-   * Remove all selected candidates for a demand
-   */
-  router.delete("/demand/:demandId/all", async (req, res) => {
-    const { demandId } = req.params;
-    // console.log(`\n📡 DELETE /api/selected-candidates/demand/${demandId}/all - Removing all selected candidates`);
+    // console.log(`✅ Candidate ${candidateId} status updated to ${status}`);
 
-    const session = driver.session();
+    // Return updated info
+    res.json({
+      success: true,
+      message: `Candidate status updated to ${status}`,
+      data: {
+        id: candidate.Can_ID,
+        name: candidate['Candidate Name'] || '',
+        status: updatedRelationship.status,
+        selectedBy: updatedRelationship.selectedBy,
+        selectedAt: updatedRelationship.selectedAt,
+        history: history,
+        updatedAt: updatedRelationship.updatedAt,
+        updatedBy: updatedRelationship.updatedBy,
+        isInProgress: isInProgress, // ✅ Add this to response
+        // Add zone info if applicable
+        inZone: rejectionStatuses.includes(status) ? true : false,
+        zoneExpiry: rejectionStatuses.includes(status) ?
+          new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString() : null
+      }
+    });
 
-    try {
-      // Delete all SelectedCandidate nodes related to this demand
-      const result = await session.run(
-        `MATCH (sc:SelectedCandidate {demandId: $demandId})
+  } catch (err) {
+    console.error("❌ Error updating candidate status:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update candidate status",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+})
+
+/**
+ * DELETE /api/selected-candidates/demand/:demandId/all
+ * Remove all selected candidates for a demand
+ */
+router.delete("/demand/:demandId/all", async (req, res) => {
+  const { demandId } = req.params;
+  // console.log(`\n📡 DELETE /api/selected-candidates/demand/${demandId}/all - Removing all selected candidates`);
+
+  const session = driver.session();
+
+  try {
+    // Delete all SelectedCandidate nodes related to this demand
+    const result = await session.run(
+      `MATCH (sc:SelectedCandidate {demandId: $demandId})
         DELETE sc
         RETURN count(sc) as deletedCount`,
-        { demandId: parseInt(demandId) }
-      );
+      { demandId: parseInt(demandId) }
+    );
 
-      const deletedCount = result.records[0].get('deletedCount').toNumber();
+    const deletedCount = result.records[0].get('deletedCount').toNumber();
 
-      // console.log(`✅ Removed ${deletedCount} selected candidates for demand ${demandId}`);
+    // console.log(`✅ Removed ${deletedCount} selected candidates for demand ${demandId}`);
 
-      res.json({
-        success: true,
-        message: `Removed ${deletedCount} selected candidates`,
-        data: { deletedCount }
-      });
+    res.json({
+      success: true,
+      message: `Removed ${deletedCount} selected candidates`,
+      data: { deletedCount }
+    });
 
-    } catch (err) {
-      console.error("❌ Error removing selected candidates:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to remove selected candidates",
-        error: err.message
-      });
-    } finally {
-      await session.close();
-    }
-  });
+  } catch (err) {
+    console.error("❌ Error removing selected candidates:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to remove selected candidates",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
 
-  /**
-   * GET /api/selected-candidates/history/:demandId/:candidateId
-   * Get full history for a specific candidate in a demand
-   */
-  router.get("/history/:demandId/:candidateId", async (req, res) => {
-    const { demandId, candidateId } = req.params;
+/**
+ * GET /api/selected-candidates/history/:demandId/:candidateId
+ * Get full history for a specific candidate in a demand
+ */
+router.get("/history/:demandId/:candidateId", async (req, res) => {
+  const { demandId, candidateId } = req.params;
 
-    // console.log(`\n📡 GET /api/selected-candidates/history/${demandId}/${candidateId} - Fetching candidate history`);
+  // console.log(`\n📡 GET /api/selected-candidates/history/${demandId}/${candidateId} - Fetching candidate history`);
 
-    const driver = getDriver();
-    const session = driver.session();
+  const driver = getDriver();
+  const session = driver.session();
 
-    try {
-      const result = await session.run(`
+  try {
+    const result = await session.run(`
         MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile {Can_ID: $candidateId})
         RETURN r.history as history, r.status as status, r.selectedBy as selectedBy, r.selectedAt as selectedAt
       `, {
-        demandId: demandId ? parseInt(demandId) : null,
-        candidateId: parseInt(candidateId)
-      });
+      demandId: demandId ? parseInt(demandId) : null,
+      candidateId: parseInt(candidateId)
+    });
 
-      if (!result.records.length) {
-        return res.status(404).json({
-          success: false,
-          message: "Candidate not found for this demand"
-        });
-      }
-
-      const historyValue = result.records[0].get('history');
-      let history = [];
-
-      if (historyValue) {
-        try {
-          history = typeof historyValue === 'string'
-            ? JSON.parse(historyValue)
-            : historyValue;
-        } catch (e) {
-          history = [];
-        }
-      }
-
-      res.json({
-        success: true,
-        data: {
-          history: history,
-          currentStatus: result.records[0].get('status'),
-          selectedBy: result.records[0].get('selectedBy'),
-          selectedAt: result.records[0].get('selectedAt')
-        }
-      });
-
-    } catch (err) {
-      console.error("❌ Error fetching history:", err);
-      res.status(500).json({
+    if (!result.records.length) {
+      return res.status(404).json({
         success: false,
-        message: "Failed to fetch history",
-        error: err.message
-      });
-    } finally {
-      await session.close();
-    }
-  });
-
-  /**
-   * PUT /api/selected-candidates/status-with-zone
-   * Update candidate status and handle zone removal if status becomes active
-   */
-  router.put("/status-with-zone", async (req, res) => {
-    const { candidateId, demandId, status, reason, changedBy } = req.body;
-
-    // console.log(`\n📡 PUT /api/selected-candidates/status-with-zone - Updating candidate ${candidateId} to ${status}`);
-    // console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
-
-    if (!candidateId || !demandId || !status) {
-      return res.status(400).json({
-        success: false,
-        message: "candidateId, demandId, and status are required"
+        message: "Candidate not found for this demand"
       });
     }
 
-    const driver = getDriver();
-    const session = driver.session();
+    const historyValue = result.records[0].get('history');
+    let history = [];
 
-    try {
-      // First get the current relationship to get existing history and demand details
-      const getResult = await session.run(`
+    if (historyValue) {
+      try {
+        history = typeof historyValue === 'string'
+          ? JSON.parse(historyValue)
+          : historyValue;
+      } catch (e) {
+        history = [];
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        history: history,
+        currentStatus: result.records[0].get('status'),
+        selectedBy: result.records[0].get('selectedBy'),
+        selectedAt: result.records[0].get('selectedAt')
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Error fetching history:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch history",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * PUT /api/selected-candidates/status-with-zone
+ * Update candidate status and handle zone removal if status becomes active
+ */
+router.put("/status-with-zone", async (req, res) => {
+  const { candidateId, demandId, status, reason, changedBy } = req.body;
+
+  // console.log(`\n📡 PUT /api/selected-candidates/status-with-zone - Updating candidate ${candidateId} to ${status}`);
+  // console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
+
+  if (!candidateId || !demandId || !status) {
+    return res.status(400).json({
+      success: false,
+      message: "candidateId, demandId, and status are required"
+    });
+  }
+
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    // First get the current relationship to get existing history and demand details
+    const getResult = await session.run(`
         MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile {Can_ID: $candidateId})
         RETURN r, d
       `, {
-        demandId: demandId ? parseInt(demandId) : null,
-        candidateId: parseInt(candidateId)
+      demandId: demandId ? parseInt(demandId) : null,
+      candidateId: parseInt(candidateId)
+    });
+
+    if (!getResult.records.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Candidate not found for this demand"
       });
+    }
 
-      if (!getResult.records.length) {
-        return res.status(404).json({
-          success: false,
-          message: "Candidate not found for this demand"
-        });
+    const relationship = getResult.records[0].get('r').properties;
+    const demand = getResult.records[0].get('d').properties;
+    const clientName = demand.client || demand.clientName || demand.ClientName;
+
+    // Define active statuses
+    const activeStatuses = [
+      'In Progress',
+      'Pending Screening',
+      'Pending Interview',
+      'Pending Client Screening',
+      'Pending Client Interview',
+      'Pending Offer',
+      'Pending Joinee'
+    ];
+
+    // Define rejection statuses
+    const rejectionStatuses = [
+      'Offer Decline',
+      'Interview Reject',
+      'Client Interview Reject',
+      'Screening Reject',
+      'Client Screening Reject'
+    ];
+
+    const isActiveStatus = activeStatuses.includes(status);
+    const isRejectionStatus = rejectionStatuses.includes(status);
+
+    // Parse existing history
+    let history = [];
+    if (relationship.history) {
+      try {
+        history = typeof relationship.history === 'string'
+          ? JSON.parse(relationship.history)
+          : relationship.history;
+      } catch (e) {
+        history = [];
       }
+    }
 
-      const relationship = getResult.records[0].get('r').properties;
-      const demand = getResult.records[0].get('d').properties;
-      const clientName = demand.client || demand.clientName || demand.ClientName;
+    // Create new history entry for this status change
+    const now = new Date().toISOString();
+    const changedByName = changedBy || relationship.selectedBy || 'Unknown';
 
-      // Define active statuses
-      const activeStatuses = [
-        'In Progress',
-        'Pending Screening',
-        'Pending Interview',
-        'Pending Client Screening',
-        'Pending Client Interview',
-        'Pending Offer',
-        'Pending Joinee'
-      ];
+    const historyEntry = {
+      action: 'STATUS_CHANGED',
+      fromStatus: relationship.status || 'In Progress',
+      toStatus: status,
+      changedBy: changedByName,
+      changedAt: now,
+      reason: reason || `Status changed to ${status}`
+    };
 
-      // Define rejection statuses
-      const rejectionStatuses = [
-        'Offer Decline',
-        'Interview Reject',
-        'Client Interview Reject',
-        'Screening Reject',
-        'Client Screening Reject'
-      ];
+    history.push(historyEntry);
 
-      const isActiveStatus = activeStatuses.includes(status);
-      const isRejectionStatus = rejectionStatuses.includes(status);
-
-      // Parse existing history
-      let history = [];
-      if (relationship.history) {
-        try {
-          history = typeof relationship.history === 'string'
-            ? JSON.parse(relationship.history)
-            : relationship.history;
-        } catch (e) {
-          history = [];
-        }
-      }
-
-      // Create new history entry for this status change
-      const now = new Date().toISOString();
-      const changedByName = changedBy || relationship.selectedBy || 'Unknown';
-
-      const historyEntry = {
-        action: 'STATUS_CHANGED',
-        fromStatus: relationship.status || 'In Progress',
-        toStatus: status,
-        changedBy: changedByName,
-        changedAt: now,
-        reason: reason || `Status changed to ${status}`
-      };
-
-      history.push(historyEntry);
-
-      // Update the relationship with new status and history
-      const updateResult = await session.run(`
+    // Update the relationship with new status and history
+    const updateResult = await session.run(`
         MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile {Can_ID: $candidateId})
         SET r.status = $status,
             r.history = $history,
@@ -785,237 +785,237 @@
             r.updatedBy = $changedBy
         RETURN r, c
       `, {
-        demandId: demandId ? parseInt(demandId) : null,
-        candidateId: parseInt(candidateId),
-        status: status,
-        history: JSON.stringify(history),
-        updatedAt: now,
-        changedBy: changedByName
-      });
+      demandId: demandId ? parseInt(demandId) : null,
+      candidateId: parseInt(candidateId),
+      status: status,
+      history: JSON.stringify(history),
+      updatedAt: now,
+      changedBy: changedByName
+    });
 
-      if (!updateResult.records.length) {
-        throw new Error("Failed to update relationship");
-      }
-
-      const updatedRelationship = updateResult.records[0].get('r').properties;
-      const candidate = updateResult.records[0].get('c').properties;
-
-      // Update candidate's isInProgress flag based on status
-      const isInProgress = isActiveStatus;
-
-      try {
-        await axios.put(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/candidates/${candidateId}/progress`, {
-          isInProgress: isInProgress
-        });
-        console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
-      } catch (syncErr) {
-        console.error('⚠️ Failed to sync progress status:', syncErr.message);
-      }
-
-      // ✅ If status is ACTIVE (not rejection), REMOVE from Zone
-      if (isActiveStatus && clientName) {
-        console.log(`🔓 Candidate ${candidateId} status changed to "${status}" (active) - Removing from Zone for client: ${clientName}`);
-        
-        try {
-          // Call the zone API to remove the candidate
-          const zoneResponse = await axios.delete(
-            `https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/zone/remove/${candidateId}/${encodeURIComponent(clientName)}`
-          );
-          
-          if (zoneResponse.data.success && zoneResponse.data.deletedCount > 0) {
-            console.log(`✅ Removed candidate ${candidateId} from Zone for client: ${clientName}`);
-          } else {
-            console.log(`ℹ️ Candidate ${candidateId} was not in Zone for client: ${clientName}`);
-          }
-        } catch (zoneErr) {
-          console.error(`⚠️ Failed to remove from Zone:`, zoneErr.message);
-          // Don't fail the main request if zone removal fails
-        }
-      } 
-      // If status is REJECTION, add to Zone
-      else if (isRejectionStatus && clientName) {
-        console.log(`🚫 Candidate ${candidateId} status changed to "${status}" (rejection) - Adding to Zone for client: ${clientName}`);
-        
-        try {
-          const zoneResponse = await axios.post(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/zone/manage`, {
-            candidateId: candidateId,
-            clientName: clientName,
-            demandId: demandId,
-            status: status,
-            reason: reason || `Rejected with status: ${status}`,
-            rejectedBy: changedByName
-          });
-          
-          if (zoneResponse.data.success) {
-            console.log(`✅ Added candidate ${candidateId} to Zone for client: ${clientName}`);
-          }
-        } catch (zoneErr) {
-          console.error(`⚠️ Failed to add to Zone:`, zoneErr.message);
-        }
-      }
-
-      console.log(`✅ Candidate ${candidateId} status updated to ${status}`);
-
-      res.json({
-        success: true,
-        message: `Candidate status updated to ${status}`,
-        data: {
-          id: candidate.Can_ID,
-          name: candidate['Candidate Name'] || '',
-          status: updatedRelationship.status,
-          selectedBy: updatedRelationship.selectedBy,
-          selectedAt: updatedRelationship.selectedAt,
-          history: history,
-          updatedAt: updatedRelationship.updatedAt,
-          updatedBy: updatedRelationship.updatedBy,
-          isInProgress: isInProgress,
-          removedFromZone: isActiveStatus && clientName ? true : false
-        }
-      });
-
-    } catch (err) {
-      console.error("❌ Error updating candidate status:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to update candidate status",
-        error: err.message
-      });
-    } finally {
-      await session.close();
+    if (!updateResult.records.length) {
+      throw new Error("Failed to update relationship");
     }
-  });
 
-  /**
-   * PUT /api/selected-candidates/demand/:demandId/update-status
-   * Update isInProgress to false for all candidates WITHOUT deleting relationships
-   */
-  router.put("/demand/:demandId/update-status", async (req, res) => {
-    const { demandId } = req.params;
+    const updatedRelationship = updateResult.records[0].get('r').properties;
+    const candidate = updateResult.records[0].get('c').properties;
 
-    // console.log(`\n📡 PUT /api/selected-candidates/demand/${demandId}/update-status - Updating candidate statuses`);
-
-    const driver = getDriver();
-    const session = driver.session();
+    // Update candidate's isInProgress flag based on status
+    const isInProgress = isActiveStatus;
 
     try {
-      // Get all candidate IDs for this demand
-      const candidatesResult = await session.run(`
+      await axios.put(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/candidates/${candidateId}/progress`, {
+        isInProgress: isInProgress
+      });
+      console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
+    } catch (syncErr) {
+      console.error('⚠️ Failed to sync progress status:', syncErr.message);
+    }
+
+    // ✅ If status is ACTIVE (not rejection), REMOVE from Zone
+    if (isActiveStatus && clientName) {
+      console.log(`🔓 Candidate ${candidateId} status changed to "${status}" (active) - Removing from Zone for client: ${clientName}`);
+
+      try {
+        // Call the zone API to remove the candidate
+        const zoneResponse = await axios.delete(
+          `https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/zone/remove/${candidateId}/${encodeURIComponent(clientName)}`
+        );
+
+        if (zoneResponse.data.success && zoneResponse.data.deletedCount > 0) {
+          console.log(`✅ Removed candidate ${candidateId} from Zone for client: ${clientName}`);
+        } else {
+          console.log(`ℹ️ Candidate ${candidateId} was not in Zone for client: ${clientName}`);
+        }
+      } catch (zoneErr) {
+        console.error(`⚠️ Failed to remove from Zone:`, zoneErr.message);
+        // Don't fail the main request if zone removal fails
+      }
+    }
+    // If status is REJECTION, add to Zone
+    else if (isRejectionStatus && clientName) {
+      console.log(`🚫 Candidate ${candidateId} status changed to "${status}" (rejection) - Adding to Zone for client: ${clientName}`);
+
+      try {
+        const zoneResponse = await axios.post(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/zone/manage`, {
+          candidateId: candidateId,
+          clientName: clientName,
+          demandId: demandId,
+          status: status,
+          reason: reason || `Rejected with status: ${status}`,
+          rejectedBy: changedByName
+        });
+
+        if (zoneResponse.data.success) {
+          console.log(`✅ Added candidate ${candidateId} to Zone for client: ${clientName}`);
+        }
+      } catch (zoneErr) {
+        console.error(`⚠️ Failed to add to Zone:`, zoneErr.message);
+      }
+    }
+
+    console.log(`✅ Candidate ${candidateId} status updated to ${status}`);
+
+    res.json({
+      success: true,
+      message: `Candidate status updated to ${status}`,
+      data: {
+        id: candidate.Can_ID,
+        name: candidate['Candidate Name'] || '',
+        status: updatedRelationship.status,
+        selectedBy: updatedRelationship.selectedBy,
+        selectedAt: updatedRelationship.selectedAt,
+        history: history,
+        updatedAt: updatedRelationship.updatedAt,
+        updatedBy: updatedRelationship.updatedBy,
+        isInProgress: isInProgress,
+        removedFromZone: isActiveStatus && clientName ? true : false
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Error updating candidate status:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update candidate status",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * PUT /api/selected-candidates/demand/:demandId/update-status
+ * Update isInProgress to false for all candidates WITHOUT deleting relationships
+ */
+router.put("/demand/:demandId/update-status", async (req, res) => {
+  const { demandId } = req.params;
+
+  // console.log(`\n📡 PUT /api/selected-candidates/demand/${demandId}/update-status - Updating candidate statuses`);
+
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    // Get all candidate IDs for this demand
+    const candidatesResult = await session.run(`
         MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile)
         RETURN c.Can_ID as candidateId, c.\`Candidate Name\` as name
       `, { demandId: parseInt(demandId) });
 
-      const candidateIds = candidatesResult.records.map(record => toNumber(record.get('candidateId')));
+    const candidateIds = candidatesResult.records.map(record => toNumber(record.get('candidateId')));
 
-      console.log(`📊 Found ${candidateIds.length} candidates to update`);
+    console.log(`📊 Found ${candidateIds.length} candidates to update`);
 
-      // ✅ ONLY update isInProgress to false - DO NOT delete relationships
-      let updatedCount = 0;
-      for (const candidateId of candidateIds) {
-        try {
-          await axios.put(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/candidates/${candidateId}/progress`, {
-            isInProgress: false
-          });
-          updatedCount++;
-          console.log(`✅ Updated candidate ${candidateId} isInProgress to false`);
-        } catch (updateErr) {
-          console.error(`⚠️ Failed to update candidate ${candidateId}:`, updateErr.message);
-        }
+    // ✅ ONLY update isInProgress to false - DO NOT delete relationships
+    let updatedCount = 0;
+    for (const candidateId of candidateIds) {
+      try {
+        await axios.put(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/candidates/${candidateId}/progress`, {
+          isInProgress: false
+        });
+        updatedCount++;
+        console.log(`✅ Updated candidate ${candidateId} isInProgress to false`);
+      } catch (updateErr) {
+        console.error(`⚠️ Failed to update candidate ${candidateId}:`, updateErr.message);
       }
-
-      // ✅ IMPORTANT: Do NOT delete the HAS_SELECTED_CANDIDATE relationships
-      // The candidates will still appear in "View Selected" modal
-
-      console.log(`✅ Updated ${updatedCount} candidates to isInProgress=false (relationships preserved)`);
-
-      res.json({
-        success: true,
-        message: `Updated ${updatedCount} candidates to not in progress (selections preserved)`,
-        data: { updatedCount, candidateIds }
-      });
-
-    } catch (err) {
-      console.error("❌ Error updating candidates:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to update candidates",
-        error: err.message
-      });
-    } finally {
-      await session.close();
     }
-  });
 
-  /**
-   * DELETE /api/selected-candidates/:demandId/:candidateId
-   * Remove a specific candidate from a demand
-   */
-  router.delete("/:demandId/:candidateId", async (req, res) => {
-    const { demandId, candidateId } = req.params;
+    // ✅ IMPORTANT: Do NOT delete the HAS_SELECTED_CANDIDATE relationships
+    // The candidates will still appear in "View Selected" modal
 
-    // console.log(`\n📡 DELETE /api/selected-candidates/${demandId}/${candidateId} - Removing candidate`);
+    console.log(`✅ Updated ${updatedCount} candidates to isInProgress=false (relationships preserved)`);
 
-    const driver = getDriver();
-    const session = driver.session();
+    res.json({
+      success: true,
+      message: `Updated ${updatedCount} candidates to not in progress (selections preserved)`,
+      data: { updatedCount, candidateIds }
+    });
 
-    try {
-      await session.run(`
+  } catch (err) {
+    console.error("❌ Error updating candidates:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update candidates",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * DELETE /api/selected-candidates/:demandId/:candidateId
+ * Remove a specific candidate from a demand
+ */
+router.delete("/:demandId/:candidateId", async (req, res) => {
+  const { demandId, candidateId } = req.params;
+
+  // console.log(`\n📡 DELETE /api/selected-candidates/${demandId}/${candidateId} - Removing candidate`);
+
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    await session.run(`
         MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile {Can_ID: $candidateId})
         DELETE r
       `, {
-        demandId: demandId ? parseInt(demandId) : null,
-        candidateId: parseInt(candidateId)
-      });
+      demandId: demandId ? parseInt(demandId) : null,
+      candidateId: parseInt(candidateId)
+    });
 
-      res.json({
-        success: true,
-        message: `Candidate removed from demand ${demandId}`
-      });
+    res.json({
+      success: true,
+      message: `Candidate removed from demand ${demandId}`
+    });
 
-    } catch (err) {
-      console.error("❌ Error removing candidate:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to remove candidate",
-        error: err.message
-      });
-    } finally {
-      await session.close();
-    }
-  });
+  } catch (err) {
+    console.error("❌ Error removing candidate:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to remove candidate",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
 
-  /**
-   * DELETE /api/selected-candidates/:demandId
-   * Delete all selected candidates for a demand
-   */
-  router.delete("/:demandId", async (req, res) => {
-    const { demandId } = req.params;
+/**
+ * DELETE /api/selected-candidates/:demandId
+ * Delete all selected candidates for a demand
+ */
+router.delete("/:demandId", async (req, res) => {
+  const { demandId } = req.params;
 
-    // console.log(`\n📡 DELETE /api/selected-candidates/${demandId} - Clearing all selected candidates`);
+  // console.log(`\n📡 DELETE /api/selected-candidates/${demandId} - Clearing all selected candidates`);
 
-    const driver = getDriver();
-    const session = driver.session();
+  const driver = getDriver();
+  const session = driver.session();
 
-    try {
-      await session.run(`
+  try {
+    await session.run(`
         MATCH (d:Demand {id: $demandId})-[r:HAS_SELECTED_CANDIDATE]->()
         DELETE r
       `, { demandId: parseInt(demandId) });
 
-      res.json({
-        success: true,
-        message: `All selected candidates cleared for demand ${demandId}`
-      });
+    res.json({
+      success: true,
+      message: `All selected candidates cleared for demand ${demandId}`
+    });
 
-    } catch (err) {
-      console.error("❌ Error clearing candidates:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to clear candidates",
-        error: err.message
-      });
-    } finally {
-      await session.close();
-    }
-  });
+  } catch (err) {
+    console.error("❌ Error clearing candidates:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to clear candidates",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
 
-  module.exports = router;
+module.exports = router;
