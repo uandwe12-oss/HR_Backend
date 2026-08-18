@@ -5,7 +5,7 @@ const bcrypt = require("bcrypt");
 // Import the shared driver helper
 const getDriver = require("../lib/neo4j");
 
-const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", "Employee", "HR", "Sales"];
+const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", "Employee", "HR", "Sales", "Pending"];
 
 /**
  * =================================================
@@ -22,30 +22,50 @@ router.get("/", async (req, res) => {
     // console.log("🔍 Executing Neo4j query...");
     
     const result = await session.run(
-      `MATCH (u:User)
-       RETURN u.username as username, 
-              u.role as role,
-              u.assignedClient as assignedClient,
-              u.pid as pid,
-              u.createdAt as createdAt
-       ORDER BY u.createdAt DESC`
+      `CALL {
+         MATCH (u:User)
+         OPTIONAL MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower(u.username)
+         RETURN u.username as username,
+                COALESCE(p.firstName + ' ' + p.lastName, p.fullName, u.name) as name,
+                u.role as role,
+                u.assignedClient as assignedClient,
+                COALESCE(p.employeeNumber, u.pid) as pid,
+                u.createdAt as createdAt,
+                p.profileStatus as approvalStatus
+         UNION
+         MATCH (p:PersonalDetails)
+         WHERE NOT EXISTS { MATCH (u2:User) WHERE toLower(u2.username) = toLower(p.userId) }
+         RETURN p.userId as username,
+                COALESCE(p.firstName + ' ' + p.lastName, p.fullName) as name,
+                'Employee' as role,
+                null as assignedClient,
+                p.employeeNumber as pid,
+                p.createdAt as createdAt,
+                p.profileStatus as approvalStatus
+       }
+       RETURN username, name, role, assignedClient, pid, createdAt, approvalStatus
+       ORDER BY createdAt DESC`
     );
 
     // console.log(`📊 Found ${result.records.length} users`);
 
     const users = result.records.map(record => {
       const username = record.get("username");
+      const name = record.get("name");
       const role = record.get("role");
       const assignedClient = record.get("assignedClient");
       const pid = record.get("pid"); // This will be null initially
       const createdAt = record.get("createdAt");
+      const approvalStatus = record.get("approvalStatus");
       
       return {
         username: username,
+        name: name || null,
         role: role,
         assignedClient: assignedClient || null,
         pid: pid || null, // Return null if no PID exists
-        createdAt: createdAt ? new Date(createdAt).toISOString() : null
+        createdAt: createdAt ? new Date(createdAt).toISOString() : null,
+        approvalStatus: approvalStatus || "PENDING"
       };
     });
 
