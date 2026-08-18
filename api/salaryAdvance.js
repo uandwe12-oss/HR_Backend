@@ -19,7 +19,8 @@ function getAmountLimit(nationality) {
 // Get employee details directly from PersonalDetails
 async function getEmployeeDetailsFromPersonalDetails(session, employeeId) {
   const result = await session.run(
-    `MATCH (p:PersonalDetails {userId: $employeeId})
+    `MATCH (p:PersonalDetails)
+     WHERE p.userId = $employeeId OR p.employeeNumber = $employeeId
      RETURN p.employeeNumber as employeeNumber, p.fullName as employeeName, p.nationality as nationality, p.emailId as email`,
     { employeeId }
   );
@@ -50,9 +51,11 @@ async function getOrCreateSalaryAdvanceAccount(session, employee) {
 
   if (result.records.length > 0) {
     const node = result.records[0].get('a');
+    const effectiveMax = node.properties.customLimit !== undefined ? Number(node.properties.customLimit) : limit.max;
     return {
+      customLimit: node.properties.customLimit !== undefined ? Number(node.properties.customLimit) : null,
       salaryAdvanceUsed: node.properties.salaryAdvanceUsed !== undefined ? Number(node.properties.salaryAdvanceUsed) : 0,
-      salaryAdvanceRemaining: node.properties.salaryAdvanceRemaining !== undefined ? Number(node.properties.salaryAdvanceRemaining) : limit.max,
+      salaryAdvanceRemaining: node.properties.salaryAdvanceRemaining !== undefined ? Number(node.properties.salaryAdvanceRemaining) : effectiveMax,
       salaryAdvanceEligible: node.properties.salaryAdvanceEligible !== undefined ? node.properties.salaryAdvanceEligible : true,
       isRepaid: node.properties.isRepaid || false,
       repaidDate: node.properties.repaidDate || null,
@@ -78,7 +81,7 @@ async function getOrCreateSalaryAdvanceAccount(session, employee) {
         salaryAdvanceRemaining: limit.max
       }
     );
-    return { salaryAdvanceUsed: 0, salaryAdvanceRemaining: limit.max, salaryAdvanceEligible: true, isRepaid: false };
+    return { customLimit: null, salaryAdvanceUsed: 0, salaryAdvanceRemaining: limit.max, salaryAdvanceEligible: true, isRepaid: false };
   }
 }
 
@@ -231,6 +234,7 @@ router.get('/employee-analytics/:employeeId', async (req, res) => {
         employeeName: employee.employeeName,
         nationality: employee.nationality,
         email: employee.email,
+        customLimit: account.customLimit,
         salaryAdvanceUsed: account.salaryAdvanceUsed,
         salaryAdvanceRemaining: account.salaryAdvanceRemaining,
         salaryAdvanceEligible: account.salaryAdvanceEligible,
@@ -444,13 +448,18 @@ router.put('/request/:requestId/approve', async (req, res) => {
     // Update SalaryAdvanceAccount
     const accountResult = await session.run(
       `MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
-       RETURN a.salaryAdvanceUsed as used, a.salaryAdvanceRemaining as remaining`,
+       RETURN a.salaryAdvanceUsed as used, a.salaryAdvanceRemaining as remaining, a.customLimit as customLimit`,
       { employeeNumber }
     );
 
     let currentUsed = 0;
+    let customLimit = null;
     if (accountResult.records.length > 0) {
       currentUsed = Number(accountResult.records[0].get('used')) || 0;
+      const dbCustomLimit = accountResult.records[0].get('customLimit');
+      if (dbCustomLimit !== null && dbCustomLimit !== undefined) {
+        customLimit = Number(dbCustomLimit);
+      }
     } else {
       await session.run(
         `CREATE (a:SalaryAdvanceAccount {
@@ -467,8 +476,9 @@ router.put('/request/:requestId/approve', async (req, res) => {
       );
     }
 
+    const effectiveMax = customLimit !== null ? customLimit : limit.max;
     const newUsed = currentUsed + amount;
-    const newRemaining = limit.max - newUsed;
+    const newRemaining = effectiveMax - newUsed;
     const isEligible = newRemaining > 0;
 
     await session.run(
@@ -578,39 +588,65 @@ router.put('/request/:requestId/reject', async (req, res) => {
   }
 });
 
-// POST - Mark as Repaid
+// POST - Mark as Repaid (Full or Partial)
 router.post('/admin/repay/:employeeNumber', async (req, res) => {
   const { employeeNumber } = req.params;
-  const { remarks, adminName } = req.body;
+  const { remarks, adminName, amount } = req.body;
   const driver = getDriver();
   const session = driver.session();
 
   try {
+    // 1. Get the current account and limits
+    const accResult = await session.run(`MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber}) RETURN a`, { employeeNumber });
+    if (accResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: 'SalaryAdvanceAccount not found for this employee.' });
+    }
+    
+    const account = accResult.records[0].get('a').properties;
+    
+    // 2. Determine base limit
     const pResult = await session.run(
       `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber}) RETURN p.nationality as nationality`, { employeeNumber }
     );
     const nationality = pResult.records.length > 0 ? pResult.records[0].get('nationality') : 'INDIA';
     const limit = getAmountLimit(nationality);
+    const limitMax = account.customLimit !== undefined ? account.customLimit : limit.max;
+
+    let newUsed = account.salaryAdvanceUsed || 0;
+    
+    // 3. Subtract repayment
+    if (amount !== undefined && !isNaN(amount)) {
+      newUsed -= parseFloat(amount);
+      if (newUsed < 0) newUsed = 0;
+    } else {
+      newUsed = 0; // Default to full repayment
+    }
+
+    const newRemaining = limitMax - newUsed;
+    const isRepaid = newUsed <= 0;
 
     const result = await session.run(
       `MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
-       SET a.salaryAdvanceUsed = 0,
-           a.salaryAdvanceRemaining = $limitMax,
-           a.salaryAdvanceEligible = true,
-           a.isRepaid = true,
-           a.repaidDate = datetime(),
-           a.repaidBy = $adminName,
+       SET a.salaryAdvanceUsed = $newUsed,
+           a.salaryAdvanceRemaining = $newRemaining,
+           a.salaryAdvanceEligible = CASE WHEN $newRemaining > 0 THEN true ELSE false END,
+           a.isRepaid = $isRepaid,
+           a.repaidDate = CASE WHEN $isRepaid THEN datetime() ELSE null END,
+           a.repaidBy = CASE WHEN $isRepaid THEN $adminName ELSE null END,
            a.repaymentRemarks = $remarks,
            a.updatedAt = datetime()
        RETURN a`,
-      { employeeNumber, adminName: adminName || 'Admin', remarks: remarks || 'Repayment completed', limitMax: limit.max }
+      { 
+        employeeNumber, 
+        adminName: adminName || 'Admin', 
+        remarks: remarks || 'Repayment recorded', 
+        newUsed, 
+        newRemaining, 
+        isRepaid 
+      }
     );
 
-    if (result.records.length === 0) {
-      return res.status(404).json({ success: false, message: 'SalaryAdvanceAccount not found for this employee.' });
-    }
-
-    res.json({ success: true, message: 'Salary advance repayment recorded successfully.' });
+    res.json({ success: true, message: isRepaid ? 'Salary advance fully repaid.' : 'Partial repayment recorded successfully.' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   } finally {
@@ -618,4 +654,99 @@ router.post('/admin/repay/:employeeNumber', async (req, res) => {
   }
 });
 
+// PUT - Update Utilized Amount Manually
+router.put('/admin/utilized/:employeeNumber', async (req, res) => {
+  const { employeeNumber } = req.params;
+  const { utilizedAmount } = req.body;
+  const driver = getDriver();
+  const session = driver.session();
+
+  if (utilizedAmount === undefined || utilizedAmount === null || isNaN(utilizedAmount) || Number(utilizedAmount) < 0) {
+    return res.status(400).json({ success: false, message: 'Invalid utilized amount provided.' });
+  }
+
+  try {
+    const accResult = await session.run(`MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber}) RETURN a`, { employeeNumber });
+    if (accResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: 'Account not found.' });
+    }
+    const account = accResult.records[0].get('a').properties;
+    
+    const pResult = await session.run(`MATCH (p:PersonalDetails {employeeNumber: $employeeNumber}) RETURN p.nationality as nationality`, { employeeNumber });
+    const nationality = pResult.records.length > 0 ? pResult.records[0].get('nationality') : 'INDIA';
+    const limit = getAmountLimit(nationality);
+    
+    const limitMax = account.customLimit !== undefined ? account.customLimit : limit.max;
+    const newUsed = Number(utilizedAmount);
+    const newRemaining = limitMax - newUsed;
+    const isRepaid = newUsed <= 0;
+
+    await session.run(
+      `MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
+       SET a.salaryAdvanceUsed = $newUsed,
+           a.salaryAdvanceRemaining = $newRemaining,
+           a.salaryAdvanceEligible = CASE WHEN $newRemaining > 0 THEN true ELSE false END,
+           a.isRepaid = $isRepaid,
+           a.updatedAt = datetime()
+       RETURN a`,
+      { employeeNumber, newUsed, newRemaining, isRepaid }
+    );
+
+    res.json({ success: true, message: 'Utilized amount updated successfully.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.close();
+  }
+});
+
+
 module.exports = router;
+
+// PUT - Update Custom Limit for Employee
+router.put('/admin/limit/:employeeNumber', async (req, res) => {
+  const { employeeNumber } = req.params;
+  const { customLimit } = req.body;
+  const driver = getDriver();
+  const session = driver.session();
+
+  if (customLimit === undefined || customLimit === null || isNaN(customLimit) || Number(customLimit) < 0) {
+    return res.status(400).json({ success: false, message: 'Invalid custom limit provided.' });
+  }
+
+  try {
+    const pResult = await session.run(
+      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber}) RETURN p.nationality as nationality, p.fullName as employeeName`, { employeeNumber }
+    );
+    if (pResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: 'Employee not found.' });
+    }
+    
+    const result = await session.run(
+      `MERGE (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
+       ON CREATE SET a.employeeName = $employeeName, a.salaryAdvanceUsed = 0, a.isRepaid = false, a.createdAt = datetime()
+       SET a.customLimit = toFloat($customLimit),
+           a.updatedAt = datetime()
+       RETURN a.salaryAdvanceUsed as used`,
+      { employeeNumber, customLimit: Number(customLimit), employeeName: pResult.records[0].get('employeeName') }
+    );
+    
+    const used = result.records[0].get('used') !== undefined ? Number(result.records[0].get('used')) : 0;
+    const newRemaining = Number(customLimit) - used;
+    const isEligible = newRemaining > 0;
+
+    await session.run(
+      `MATCH (a:SalaryAdvanceAccount {employeeNumber: $employeeNumber})
+       SET a.salaryAdvanceRemaining = $newRemaining,
+           a.salaryAdvanceEligible = $isEligible`,
+      { employeeNumber, newRemaining, isEligible }
+    );
+
+    res.json({ success: true, message: 'Employee limit updated successfully' });
+  } catch (error) {
+    console.error('Error updating limit:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  } finally {
+    await session.close();
+  }
+});
