@@ -23,6 +23,7 @@ const HEALTH_CARD_FOLDER_ID = '1vRQBgV6pMuXdVcVKzqCRJgMQ5L60GzYm'; // For Health
 const EMPLOYEE_TRANSFER_FOLDER_ID = '1RQU_k8ie5yRsYFOIPX997ItIBbwAPpJ2'; // For Relieving Letters
 const REIMBURSEMENT_FOLDER_ID = '1RQU_k8ie5yRsYFOIPX997ItIBbwAPpJ2'; // For Reimbursement Documents
 const PAYSLIP_FOLDER_ID = '10Gp5wXt-x_wGKGiJ_8KbIRuFN9CwNfgh'; // For Employee Payslips
+const CHINA_PAYSLIP_FOLDER_ID = '1p0F19U4o5o-TFA2Y8f9rqkBS3xbSGl3y'; // For China Payslips
 const NATIONAL_ID_FOLDER_ID = '19tRkAmK8ZPgyvFla8felhozyebw48zRv'; // For China National ID
 
 const RELIEVING_LETTER_1_FOLDER_ID = '1uRcgItvzQKrcteSkBzBL95vXAfgevVmU'; // For Relieving Letter 1
@@ -465,6 +466,10 @@ async function uploadPayslip(fileBuffer, originalName, mimeType, userId) {
   return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'payslip', PAYSLIP_FOLDER_ID);
 }
 
+async function uploadChinaPayslip(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'payslip_china', CHINA_PAYSLIP_FOLDER_ID);
+}
+
 async function uploadNewsImage(fileBuffer, originalName, mimeType, userId = 'news') {
   return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'news_banner', TIMESHEET_FOLDER_ID);
 }
@@ -666,6 +671,7 @@ module.exports = {
   uploadPfPassbook,
   uploadReimbursementDocument,
   uploadPayslip,
+  uploadChinaPayslip,
   uploadNationalIdDocument,
   uploadNewsImage,
   uploadNewsAttachment,
