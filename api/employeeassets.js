@@ -566,7 +566,6 @@ router.post("/release/:assetId", upload.single('image'), async (req, res) => {
           createdAt: new Date().toISOString()
         });
       }
-      console.log(`Successfully created notifications for users: ${adminUsers.join(', ')}`);
     } catch (notifErr) {
       console.error("Failed to create notification:", notifErr);
     }
