@@ -373,6 +373,20 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         payslipUrl: payslipUrl || '', createdAt: now 
       });
     }
+      
+      // Send notification to employee
+      await session.run(`
+        MATCH (pd:PersonalDetails {employeeNumber: $employeeNumber})
+        CREATE (n:Notification {
+          id: randomUUID(),
+          userId: pd.userId,
+          message: '📄 Your payslip for ' + $month + ' ' + $year + ' is now available.',
+          type: 'Payroll',
+          isRead: false,
+          createdAt: datetime().toISO()
+        })
+      `, { employeeNumber, month, year });
+
     res.json({
       success: true,
       message: "Payroll record saved successfully",
