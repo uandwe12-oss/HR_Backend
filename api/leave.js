@@ -75,6 +75,13 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
         rawAnnualUsed = rawAnnualUsed - sickAvailableForOverflow;
       }
     }
+    
+    // NEW: If rawSickUsed > 3, overflow extra sick leaves into Annual Leave
+    if (rawSickUsed > sickEntitlement) {
+      const sickOverflow = rawSickUsed - sickEntitlement;
+      rawAnnualUsed += sickOverflow;
+      rawSickUsed = sickEntitlement;
+    }
   }
 
   const annualUsed = Math.min(rawAnnualUsed, annualEntitlement);
@@ -262,12 +269,18 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
         lopDays = daysRequested - currentBalance;
       }
     } else if (leaveType === 'Sick Leave') {
-      const currentBalance = Math.max(0, balances.sickBalance);
-      if (daysRequested > currentBalance) {
-        // Technically sick leave doesn't have an "annualLeaveDays" field in the schema, 
-        // we can store the consumed part in a new field if we want, or just treat excess as LOP.
-        lopDays = daysRequested - currentBalance;
-        annualLeaveDays = 0;
+      const currentSickBalance = Math.max(0, balances.sickBalance);
+      if (daysRequested > currentSickBalance) {
+        const excessSick = daysRequested - currentSickBalance;
+        const currentAnnualBalance = Math.max(0, balances.annualBalance);
+        
+        if (excessSick > currentAnnualBalance) {
+          lopDays = excessSick - currentAnnualBalance;
+          annualLeaveDays = currentAnnualBalance;
+        } else {
+          annualLeaveDays = excessSick;
+          lopDays = 0;
+        }
       } else {
         annualLeaveDays = 0;
       }
@@ -277,7 +290,8 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
     const salaryDeductionPercentage = lopDays * 2;
 
     const countResult = await session.run('MATCH (l:LeaveRequest) RETURN count(l) as c');
-    const currentCount = countResult.records[0].get('c').toNumber();
+    const cVal = countResult.records[0].get('c');
+    const currentCount = typeof cVal.toNumber === 'function' ? cVal.toNumber() : Number(cVal);
     const leaveId = `leave_${currentCount + 1}_${employeeNumber}`;
     const createdAt = new Date().toISOString();
     
