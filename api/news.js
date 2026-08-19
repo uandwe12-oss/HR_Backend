@@ -153,6 +153,29 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachm
         layoutOrder: layoutOrder || 'IMAGE_FIRST',
         createdAt: new Date().toISOString()
       });
+
+      // Send notifications to all applicable users
+      const msgTitle = title ? title : "A new announcement has been posted";
+      const message = `📰 Company News: ${msgTitle}`;
+      const notifNationality = (nationality || 'ALL').toUpperCase();
+
+      await session.run(`
+        MATCH (u:User)
+        OPTIONAL MATCH (p:PersonalDetails {userId: u.username})
+        WITH u, coalesce(p.nationality, 'ALL') AS userNat
+        WHERE $nat = 'ALL' OR userNat = $nat OR userNat = '' OR userNat IS NULL
+        CREATE (n:Notification {
+          id: randomUUID(),
+          userId: u.username,
+          message: $message,
+          type: 'News',
+          isRead: false,
+          createdAt: datetime().toISO()
+        })
+      `, {
+        message,
+        nat: notifNationality
+      });
     }
 
     res.json({ success: true, message: 'News item published successfully', data: result.records[0].get('n').properties });
