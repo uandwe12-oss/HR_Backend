@@ -488,7 +488,8 @@ router.post("/admin/user/:userId/past-leave", async (req, res) => {
     }
 
     const countResult = await session.run('MATCH (l:LeaveRequest) RETURN count(l) as c');
-    const currentCount = countResult.records[0].get('c').toNumber();
+    const cVal = countResult.records[0].get('c');
+    const currentCount = typeof cVal === 'number' ? cVal : (cVal.toNumber ? cVal.toNumber() : Number(cVal));
     const leaveId = `leave_${currentCount + 1}_${employeeNumber}`;
     const createdAt = new Date().toISOString();
 
