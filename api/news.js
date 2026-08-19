@@ -42,54 +42,30 @@ router.get('/latest', async (req, res) => {
 });
 
 // Create or update news item
-router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachment', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
-  const { id, title, linkUrl, content, nationality, layoutOrder } = req.body;
-  let imageUrl = req.body.imageUrl || '';
-  let attachmentUrl = req.body.attachmentUrl || '';
-  let videoUrl = req.body.videoUrl || '';
+router.post('/', upload.array('media', 10), async (req, res) => {
+  const { id, title, linkUrl, content, nationality, layoutOrder, mediaLayout } = req.body;
+  
+  let imageUrls = req.body.imageUrls ? JSON.parse(req.body.imageUrls) : [];
+  let attachmentUrls = req.body.attachmentUrls ? JSON.parse(req.body.attachmentUrls) : [];
+  let videoUrls = req.body.videoUrls ? JSON.parse(req.body.videoUrls) : [];
 
-  if (req.files && req.files['image'] && req.files['image'][0]) {
-    try {
-      const uploadRes = await googleDriveService.uploadNewsImage(
-        req.files['image'][0].buffer,
-        req.files['image'][0].originalname,
-        req.files['image'][0].mimetype
-      );
-      if (uploadRes.success) {
-        imageUrl = uploadRes.directLink;
+  if (req.files && req.files.length > 0) {
+    for (const file of req.files) {
+      try {
+        if (file.mimetype.startsWith('image/')) {
+          const uploadRes = await googleDriveService.uploadNewsImage(file.buffer, file.originalname, file.mimetype);
+          if (uploadRes.success) imageUrls.push(uploadRes.directLink);
+        } else if (file.mimetype.startsWith('video/')) {
+          const uploadRes = await googleDriveService.uploadNewsAttachment(file.buffer, file.originalname, file.mimetype);
+          if (uploadRes.success) videoUrls.push(uploadRes.directLink);
+        } else {
+          // Treat others as attachments/documents
+          const uploadRes = await googleDriveService.uploadNewsAttachment(file.buffer, file.originalname, file.mimetype);
+          if (uploadRes.success) attachmentUrls.push(uploadRes.directLink);
+        }
+      } catch (e) {
+        console.error("Failed to upload media to drive:", e);
       }
-    } catch (e) {
-      console.error("Failed to upload news image to drive:", e);
-    }
-  }
-
-  if (req.files && req.files['attachment'] && req.files['attachment'][0]) {
-    try {
-      const uploadRes = await googleDriveService.uploadNewsAttachment(
-        req.files['attachment'][0].buffer,
-        req.files['attachment'][0].originalname,
-        req.files['attachment'][0].mimetype
-      );
-      if (uploadRes.success) {
-        attachmentUrl = uploadRes.directLink;
-      }
-    } catch (e) {
-      console.error("Failed to upload news attachment to drive:", e);
-    }
-  }
-
-  if (req.files && req.files['video'] && req.files['video'][0]) {
-    try {
-      const uploadRes = await googleDriveService.uploadNewsAttachment(
-        req.files['video'][0].buffer,
-        req.files['video'][0].originalname,
-        req.files['video'][0].mimetype
-      );
-      if (uploadRes.success) {
-        videoUrl = uploadRes.directLink;
-      }
-    } catch (e) {
-      console.error("Failed to upload news video to drive:", e);
     }
   }
 
@@ -103,54 +79,59 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachm
       result = await session.run(`
         MATCH (n:News {id: $id})
         SET n.title = $title,
-            n.imageUrl = CASE WHEN $imageUrl <> '' THEN $imageUrl ELSE n.imageUrl END,
-            n.attachmentUrl = CASE WHEN $attachmentUrl <> '' THEN $attachmentUrl ELSE n.attachmentUrl END,
-            n.videoUrl = CASE WHEN $videoUrl <> '' THEN $videoUrl ELSE n.videoUrl END,
+            n.imageUrls = $imageUrls,
+            n.attachmentUrls = $attachmentUrls,
+            n.videoUrls = $videoUrls,
             n.linkUrl = $linkUrl,
             n.content = $content,
             n.nationality = $nationality,
-            n.layoutOrder = $layoutOrder
+            n.layoutOrder = $layoutOrder,
+            n.mediaLayout = $mediaLayout
         RETURN n
       `, {
         id: id,
         title: title || '',
-        imageUrl: imageUrl || '',
-        attachmentUrl: attachmentUrl || '',
-        videoUrl: videoUrl || '',
+        imageUrls: imageUrls,
+        attachmentUrls: attachmentUrls,
+        videoUrls: videoUrls,
         linkUrl: linkUrl || '',
         content: content || '',
         nationality: (nationality || 'ALL').toUpperCase(),
-        layoutOrder: layoutOrder || 'IMAGE_FIRST'
+        layoutOrder: layoutOrder || 'IMAGE_FIRST',
+        mediaLayout: mediaLayout || 'STACKED'
       });
     } else {
       // Create new
       const countResult = await session.run('MATCH (n:News) RETURN count(n) as c');
-      const currentCount = countResult.records[0].get('c').toNumber();
+      const countValue = countResult.records[0].get('c');
+      const currentCount = typeof countValue.toNumber === 'function' ? countValue.toNumber() : Number(countValue);
       const newsId = `news_${currentCount + 1}`;
       result = await session.run(`
         CREATE (n:News {
           id: $id,
           title: $title,
-          imageUrl: $imageUrl,
-          attachmentUrl: $attachmentUrl,
-          videoUrl: $videoUrl,
+          imageUrls: $imageUrls,
+          attachmentUrls: $attachmentUrls,
+          videoUrls: $videoUrls,
           linkUrl: $linkUrl,
           content: $content,
           nationality: $nationality,
           layoutOrder: $layoutOrder,
+          mediaLayout: $mediaLayout,
           createdAt: $createdAt
         })
         RETURN n
       `, {
         id: newsId,
         title: title || '',
-        imageUrl: imageUrl || '',
-        attachmentUrl: attachmentUrl || '',
-        videoUrl: videoUrl || '',
+        imageUrls: imageUrls,
+        attachmentUrls: attachmentUrls,
+        videoUrls: videoUrls,
         linkUrl: linkUrl || '',
         content: content || '',
         nationality: (nationality || 'ALL').toUpperCase(),
         layoutOrder: layoutOrder || 'IMAGE_FIRST',
+        mediaLayout: mediaLayout || 'STACKED',
         createdAt: new Date().toISOString()
       });
 
@@ -170,11 +151,12 @@ router.post('/', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'attachm
           message: $message,
           type: 'News',
           isRead: false,
-          createdAt: datetime().toISO()
+          createdAt: $createdAt
         })
       `, {
         message,
-        nat: notifNationality
+        nat: notifNationality,
+        createdAt: new Date().toISOString()
       });
     }
 
@@ -194,14 +176,14 @@ router.delete('/:id', async (req, res) => {
   try {
     const fetchResult = await session.run(`
       MATCH (n:News {id: $id})
-      RETURN n.imageUrl AS imageUrl, n.attachmentUrl AS attachmentUrl, n.videoUrl AS videoUrl
+      RETURN n.imageUrls AS imageUrls, n.attachmentUrls AS attachmentUrls, n.videoUrls AS videoUrls
     `, { id: req.params.id });
 
     if (fetchResult.records.length > 0) {
       const record = fetchResult.records[0];
-      const imageUrl = record.get('imageUrl');
-      const attachmentUrl = record.get('attachmentUrl');
-      const videoUrl = record.get('videoUrl');
+      const imageUrls = record.get('imageUrls') || [];
+      const attachmentUrls = record.get('attachmentUrls') || [];
+      const videoUrls = record.get('videoUrls') || [];
 
       const extractDriveId = (url) => {
         if (!url) return null;
@@ -219,7 +201,8 @@ router.delete('/:id', async (req, res) => {
         return null;
       };
 
-      const filesToDelete = [imageUrl, attachmentUrl, videoUrl]
+      const allUrls = [...imageUrls, ...attachmentUrls, ...videoUrls];
+      const filesToDelete = allUrls
         .map(extractDriveId)
         .filter(id => id); // Remove nulls
 
