@@ -40,14 +40,16 @@ router.get("/user/:userId", async (req, res) => {
     // A. Fetch User details to get the client (for holiday group)
     const pdResult = await session.run(`
       MATCH (pd:PersonalDetails {userId: $userId})
-      RETURN pd.client AS client, pd.employeeName AS employeeName, pd.employeeNumber AS employeeNumber
+      RETURN pd.assignedCompany AS client, pd.employmentLocation AS location, pd.employeeName AS employeeName, pd.employeeNumber AS employeeNumber
     `, { userId });
 
     let client = null;
+    let location = null;
     let employeeName = userId;
     let employeeNumber = "";
     if (pdResult.records.length > 0) {
       client = pdResult.records[0].get("client");
+      location = pdResult.records[0].get("location");
       employeeName = pdResult.records[0].get("employeeName") || userId;
       employeeNumber = pdResult.records[0].get("employeeNumber") || "";
     }
@@ -55,15 +57,29 @@ router.get("/user/:userId", async (req, res) => {
     // B. Fetch Holidays for this client
     let holidays = [];
     let queryClient = client || "UANDWE"; // Default to company if no client assigned
+    let exactGroupName = location && client ? `${location.replace(/\s+/g, '')}${client.replace(/\s+/g, '')}` : queryClient;
+    console.log("DEBUG: location =", location, "client =", client, "exactGroupName =", exactGroupName);
 
-    const holidayResult = await session.run(`
-      MATCH (g:Group {name: $client})
+    let holidayResult = await session.run(`
+      MATCH (g:Group {name: $exactGroupName})
       OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
-      WITH DISTINCT linkedGroup
-      MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
+      WITH DISTINCT coalesce(linkedGroup, g) AS validGroup
+      MATCH (validGroup)-[:HAS_HOLIDAY]->(h:Holiday)
       WHERE h.date STARTS WITH $monthPrefix
-      RETURN h.date AS date, h.name AS name
-    `, { client: queryClient, monthPrefix: monthParam });
+      RETURN DISTINCT h.date AS date, h.name AS name
+    `, { exactGroupName, monthPrefix: monthParam });
+    
+    if (holidayResult.records.length === 0) {
+      holidayResult = await session.run(`
+        MATCH (g:Group)
+        WHERE g.name = $client OR g.client = $client
+        OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
+        WITH DISTINCT coalesce(linkedGroup, g) AS validGroup
+        MATCH (validGroup)-[:HAS_HOLIDAY]->(h:Holiday)
+        WHERE h.date STARTS WITH $monthPrefix
+        RETURN DISTINCT h.date AS date, h.name AS name
+      `, { client: queryClient, monthPrefix: monthParam });
+    }
     
     holidays = holidayResult.records.map(r => ({
       date: r.get("date"),
@@ -139,6 +155,7 @@ router.get("/user/:userId", async (req, res) => {
     let totalLeaveDays = 0;
     let totalHolidays = 0;
     const weeklyHoursMap = {};
+    const weeklyExplicitOvertimeMap = {};
 
     for (let i = 1; i <= numDays; i++) {
       const d = new Date(year, month - 1, i);
@@ -183,14 +200,8 @@ router.get("/user/:userId", async (req, res) => {
       if (exception) {
         hasException = true;
         if (exception.hours !== null && exception.hours !== undefined) {
-          if (status === "Working Day" || status === "WFH") {
-            if (exception.hours > 8) {
-              totalOvertimeHours += (exception.hours - 8);
-            }
-          } else {
-             // Holiday, Weekend, Leave
+          if (status !== "Working Day" && status !== "WFH") {
              if (exception.hours > 0) {
-               totalOvertimeHours += exception.hours;
                status = "Exception";
              }
           }
@@ -205,6 +216,10 @@ router.get("/user/:userId", async (req, res) => {
       const firstDayOfMonth = (new Date(year, month - 1, 1).getDay() + 6) % 7; // Mon=0, Tue=1, ..., Sun=6
       const weekOfMonth = Math.ceil((i + firstDayOfMonth) / 7);
       weeklyHoursMap[weekOfMonth] = (weeklyHoursMap[weekOfMonth] || 0) + hours;
+      
+      if (exception && exception.type === 'Overtime' && exception.hours > 0) {
+         weeklyExplicitOvertimeMap[weekOfMonth] = (weeklyExplicitOvertimeMap[weekOfMonth] || 0) + exception.hours;
+      }
 
       timesheetDays.push({
         date: dStr,
@@ -215,6 +230,14 @@ router.get("/user/:userId", async (req, res) => {
         hasException
       });
     }
+
+    // Calculate totalOvertimeHours based on weekly logic
+    Object.keys(weeklyHoursMap).forEach(week => {
+      const weekHours = weeklyHoursMap[week];
+      const explicitOT = weeklyExplicitOvertimeMap[week] || 0;
+      const calculatedOT = Math.max(0, weekHours - 40);
+      totalOvertimeHours += Math.max(calculatedOT, explicitOT);
+    });
 
     res.json({
       success: true,
@@ -233,10 +256,16 @@ router.get("/user/:userId", async (req, res) => {
           totalLopDays,
           totalLeaveDays,
           totalHolidays,
-          weeklyHours: Object.keys(weeklyHoursMap).map(week => ({
-            week: parseInt(week),
-            hours: weeklyHoursMap[week]
-          }))
+          weeklyHours: Object.keys(weeklyHoursMap).map(week => {
+            const weekHours = weeklyHoursMap[week];
+            const explicitOT = weeklyExplicitOvertimeMap[week] || 0;
+            const calculatedOT = Math.max(0, weekHours - 40);
+            return {
+              week: parseInt(week),
+              hours: weekHours,
+              overtime: Math.max(calculatedOT, explicitOT)
+            };
+          })
         },
         days: timesheetDays
       }
