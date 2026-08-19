@@ -63,6 +63,29 @@ router.put("/read/:id", async (req, res) => {
   }
 });
 
+// Delete a notification completely
+router.delete("/:id", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) return res.status(500).json({ success: false, message: "No DB connection" });
+  
+  const session = driver.session();
+  const { id } = req.params;
+  
+  try {
+    await session.run(`
+      MATCH (n:Notification {id: $id})
+      DELETE n
+    `, { id });
+    
+    res.json({ success: true, message: "Notification deleted" });
+  } catch (error) {
+    console.error("Error deleting notification:", error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.close();
+  }
+});
+
 // Mark all as read
 router.put("/read-all/:userId", async (req, res) => {
   const driver = getDriver();
