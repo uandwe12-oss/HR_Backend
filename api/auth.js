@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const getDriver = require("../lib/neo4j");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 // ==========================================
 // Microsoft MSAL Configuration
@@ -101,43 +102,6 @@ return res.redirect(
     console.log("Microsoft login email:", normalizedEmail);
 
     // ==========================================
-    // 3. Allowed Organization Check
-    // ==========================================
-
-    let allowedDomains = [];
-    try {
-      const configPath = path.join(__dirname, '../config/allowedDomains.json');
-      const configData = fs.readFileSync(configPath, 'utf8');
-      allowedDomains = JSON.parse(configData).allowedDomains;
-    } catch (err) {
-      console.error("Error reading allowed domains config:", err);
-      // Fallback
-      allowedDomains = [
-        "@kyotralis.com",
-        "@uandwelabs.com",
-      ];
-    }
-
-    const isAllowedDomain = allowedDomains.some((domain) =>
-      normalizedEmail.endsWith(domain)
-    );
-
-    if (!isAllowedDomain) {
-      console.log(
-        "Unauthorized Microsoft domain:",
-        normalizedEmail
-      );
-
-      return res.redirect(
-"https://uandwe.com/myuandwe/login?error=UnauthorizedDomain"      );
-    }
-
-    console.log(
-      "Microsoft domain is allowed:",
-      normalizedEmail
-    );
-
-    // ==========================================
     // 4. Check User in Neo4j
     // ==========================================
 
@@ -178,6 +142,16 @@ return res.redirect(
             username: $email,
             role: "Pending",
             name: $name,
+            createdAt: $createdAt
+          })
+          WITH u
+          MATCH (admin:User {role: 'Admin'})
+          CREATE (n:Notification {
+            id: randomUUID(),
+            userId: admin.username,
+            type: "SSO_NEW_USER",
+            message: "New user " + u.name + " (" + u.username + ") has signed in via SSO and is waiting for approval.",
+            isRead: false,
             createdAt: $createdAt
           })
           `,
@@ -252,6 +226,7 @@ return res.redirect(
     token
   )}`
 );
+
     } finally {
       await session.close();
     }
@@ -280,6 +255,7 @@ return res.redirect(
 "https://uandwe.com/myuandwe/login?error=SSOFailed"    );
   }
 });
+
 
 // ==========================================
 // Export Router
