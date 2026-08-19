@@ -59,6 +59,9 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
   let annualEntitlement = DEFAULT_ANNUAL_LEAVE;
   let sickEntitlement = 0;
 
+  let totalSickUsed = rawSickUsed + pendingSick;
+  let totalAnnualUsed = rawAnnualUsed + pendingAnnual;
+
   if (nationality === 'INDIA') {
     annualEntitlement = 8;
     sickEntitlement = 3;
@@ -74,13 +77,23 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
         rawSickUsed += sickAvailableForOverflow;
         rawAnnualUsed = rawAnnualUsed - sickAvailableForOverflow;
       }
+      // Recalculate totals after migration
+      totalSickUsed = rawSickUsed + pendingSick;
+      totalAnnualUsed = rawAnnualUsed + pendingAnnual;
     }
     
-    // NEW: If rawSickUsed > 3, overflow extra sick leaves into Annual Leave
-    if (rawSickUsed > sickEntitlement) {
-      const sickOverflow = rawSickUsed - sickEntitlement;
-      rawAnnualUsed += sickOverflow;
-      rawSickUsed = sickEntitlement;
+    // NEW: If totalSickUsed > sickEntitlement, overflow extra sick leaves into Annual Leave
+    if (totalSickUsed > sickEntitlement) {
+      const sickOverflow = totalSickUsed - sickEntitlement;
+      totalAnnualUsed += sickOverflow;
+      totalSickUsed = sickEntitlement;
+
+      // Adjust raw variables for accurate "Used" calculations
+      if (rawSickUsed > sickEntitlement) {
+        const rawSickOverflow = rawSickUsed - sickEntitlement;
+        rawAnnualUsed += rawSickOverflow;
+        rawSickUsed = sickEntitlement;
+      }
     }
   }
 
@@ -92,8 +105,8 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
   const monthlyLOP = Math.max(0, lopUsed - lopBeforeThisMonth);
   const monthlyAL = monthlyRawAL - monthlyLOP;
   
-  const annualBalance = Math.max(0, annualEntitlement - rawAnnualUsed) - pendingAnnual;
-  const sickBalance = Math.max(0, sickEntitlement - rawSickUsed) - pendingSick;
+  const annualBalance = Math.max(0, annualEntitlement - totalAnnualUsed);
+  const sickBalance = Math.max(0, sickEntitlement - totalSickUsed);
 
   return {
     annualEntitlement,
@@ -532,23 +545,46 @@ router.post("/admin/user/:userId/past-leave", async (req, res) => {
   }
 });
 
-// Admin Route to fetch all prior leaves
+// Admin Route to fetch all leave balances
 router.get("/balances", async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
 
   try {
-    const result = await session.run(`
-      MATCH (u:User)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
-      RETURN u.username as userId, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed
+    const leavesResult = await session.run(`MATCH (l:LeaveRequest) RETURN l`);
+    const allLeaves = leavesResult.records.map(r => r.get('l').properties);
+
+    const usersResult = await session.run(`
+      MATCH (u:User)
+      OPTIONAL MATCH (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
+      OPTIONAL MATCH (p:PersonalDetails {userId: u.username})
+      RETURN u.username as userId, p.nationality as nationality, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed
     `);
 
-    const balances = result.records.map(record => ({
-      userId: record.get('userId'),
-      priorAnnualUsed: record.get('priorAnnualUsed') || 0,
-      priorSickUsed: record.get('priorSickUsed') || 0,
-      priorWfhUsed: record.get('priorWfhUsed') || 0
-    }));
+    const userLeavesMap = {};
+    allLeaves.forEach(l => {
+      if (!userLeavesMap[l.userId]) userLeavesMap[l.userId] = [];
+      userLeavesMap[l.userId].push(l);
+    });
+
+    const balances = usersResult.records.map(record => {
+      const userId = record.get('userId');
+      const nationality = record.get('nationality') || '';
+      const priorLeaves = {
+        priorAnnualUsed: parseFloat(record.get('priorAnnualUsed')) || 0,
+        priorSickUsed: parseFloat(record.get('priorSickUsed')) || 0,
+        priorWfhUsed: parseFloat(record.get('priorWfhUsed')) || 0
+      };
+      const userLeaves = userLeavesMap[userId] || [];
+      const calc = calculateBalances(userLeaves, nationality, priorLeaves);
+      return {
+        userId,
+        priorAnnualUsed: priorLeaves.priorAnnualUsed,
+        priorSickUsed: priorLeaves.priorSickUsed,
+        priorWfhUsed: priorLeaves.priorWfhUsed,
+        ...calc
+      };
+    });
 
     res.json({ success: true, data: balances });
   } catch (error) {
