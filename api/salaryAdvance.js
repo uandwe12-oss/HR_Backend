@@ -190,6 +190,27 @@ router.post('/request', async (req, res) => {
       }
     );
 
+    // Notify Admin
+    await session.run(
+      `MATCH (admin:User) WHERE admin.role = 'Admin'
+       CREATE (n:Notification {
+         id: randomUUID(),
+         userId: admin.username,
+         message: $employeeName + ' submitted a salary advance request for ' + $currency + ' ' + $amount + '.',
+         type: 'SALARY_ADVANCE_REQUEST',
+         relatedId: $requestId,
+         isRead: false,
+         createdAt: $appliedAt
+       })`,
+      {
+        employeeName: employee.employeeName,
+        currency: limit.currency,
+        amount: parseFloat(amount),
+        requestId,
+        appliedAt
+      }
+    );
+
 
     try {
       await sendSalaryAdvanceEmail({
@@ -496,7 +517,18 @@ router.put('/request/:requestId/approve', async (req, res) => {
        SET r.status = 'APPROVED', 
            r.approvedAt = datetime(),
            r.adminRemarks = $adminRemarks,
-           r.reviewedBy = $reviewedBy`,
+           r.reviewedBy = $reviewedBy
+       WITH r
+       MATCH (p:PersonalDetails {employeeNumber: r.employeeNumber})
+       CREATE (n:Notification {
+         id: randomUUID(),
+         userId: coalesce(p.userId, p.employeeNumber),
+         message: 'Your salary advance request of ' + r.currency + ' ' + r.amount + ' has been APPROVED.',
+         type: 'SALARY_ADVANCE_STATUS',
+         relatedId: r.requestId,
+         isRead: false,
+         createdAt: datetime()
+       })`,
       { requestId, adminRemarks: adminRemarks || 'No remarks', reviewedBy: reviewedBy || 'Admin' }
     );
 
@@ -562,7 +594,18 @@ router.put('/request/:requestId/reject', async (req, res) => {
        SET r.status = 'REJECTED', 
            r.updatedAt = datetime(),
            r.adminRemarks = $adminRemarks,
-           r.reviewedBy = $reviewedBy`,
+           r.reviewedBy = $reviewedBy
+       WITH r
+       MATCH (p:PersonalDetails {employeeNumber: r.employeeNumber})
+       CREATE (n:Notification {
+         id: randomUUID(),
+         userId: coalesce(p.userId, p.employeeNumber),
+         message: 'Your salary advance request of ' + r.currency + ' ' + r.amount + ' has been REJECTED.',
+         type: 'SALARY_ADVANCE_STATUS',
+         relatedId: r.requestId,
+         isRead: false,
+         createdAt: datetime()
+       })`,
       { requestId, adminRemarks: adminRemarks || 'No remarks', reviewedBy: reviewedBy || 'Admin' }
     );
 
