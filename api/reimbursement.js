@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const getDriver = require('../lib/neo4j');
 const googleDrive = require('../services/googleDrive');
+const { sendEmail } = require('../services/emailService');
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -79,7 +80,18 @@ router.post('/', upload.single('document'), async (req, res) => {
          approvedBy: null
        })
        CREATE (p)-[:HAS_REIMBURSEMENT]->(r)
-       RETURN r`,
+       WITH r
+       MATCH (admin:User) WHERE admin.role = 'Admin'
+       CREATE (n:Notification {
+         id: randomUUID(),
+         userId: admin.username,
+         message: $employeeName + ' submitted a ' + $reimbursementType + ' reimbursement request.',
+         type: 'REIMBURSEMENT_REQUEST',
+         relatedId: r.id,
+         isRead: false,
+         createdAt: $currentTime
+       })
+       RETURN r, admin.username AS adminEmail`,
       {
         employeeNumber,
         employeeName,
@@ -93,6 +105,30 @@ router.post('/', upload.single('document'), async (req, res) => {
     );
 
     const createdRecord = result.records[0].get('r').properties;
+    
+    // Collect all admin emails and send email
+    const adminEmails = result.records.map(record => record.get('adminEmail')).filter(email => email);
+    if (adminEmails.length > 0) {
+      const subject = `New Reimbursement Request: ${employeeName || employeeNumber}`;
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #2b6cb0;">New Reimbursement Request</h2>
+          <p>A new reimbursement request has been submitted and requires your attention.</p>
+          <table border="1" cellpadding="10" style="border-collapse: collapse; width: 100%;">
+            <tr><th style="text-align: left; background-color: #f7fafc; width: 40%;">Employee Name</th><td>${employeeName || employeeNumber}</td></tr>
+            <tr><th style="text-align: left; background-color: #f7fafc;">Reimbursement Type</th><td>${reimbursementType}</td></tr>
+            <tr><th style="text-align: left; background-color: #f7fafc;">Requested Amount</th><td>₹${amount}</td></tr>
+            <tr><th style="text-align: left; background-color: #f7fafc;">Description</th><td>${description || 'N/A'}</td></tr>
+          </table>
+          <br>
+          <p>Please log in to the HR Portal Admin Dashboard to review it.</p>
+        </div>
+      `;
+      adminEmails.forEach(email => {
+        sendEmail({ to: email, subject, html }).catch(e => console.error("Email send failed:", e));
+      });
+    }
+
     res.status(201).json({ success: true, message: 'Reimbursement request submitted', data: createdRecord });
   } catch (error) {
     console.error('Error creating reimbursement:', error);
@@ -175,7 +211,18 @@ router.put('/admin/:id/status', async (req, res) => {
            r.updatedAt = $currentTime,
            r.approvedBy = $adminName,
            r.reason = $reason
-       RETURN r`,
+       WITH r
+       MATCH (p:PersonalDetails)-[:HAS_REIMBURSEMENT]->(r)
+       CREATE (n:Notification {
+         id: randomUUID(),
+         userId: coalesce(p.userId, p.employeeNumber),
+         message: 'Your ' + r.reimbursementType + ' reimbursement request has been ' + r.status + '.',
+         type: 'REIMBURSEMENT_STATUS',
+         relatedId: r.id,
+         isRead: false,
+         createdAt: $currentTime
+       })
+       RETURN r, coalesce(p.userId, p.employeeNumber) AS employeeEmail`,
       { id, status, currentTime, adminName: adminName || 'Admin', reason: reason.trim() }
     );
 
@@ -184,6 +231,27 @@ router.put('/admin/:id/status', async (req, res) => {
     }
 
     const updatedRecord = result.records[0].get('r').properties;
+    const employeeEmail = result.records[0].get('employeeEmail');
+
+    if (employeeEmail) {
+      const subject = `Reimbursement Request ${status}`;
+      const color = status === 'APPROVED' ? '#48bb78' : '#f56565';
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: ${color};">Reimbursement Request ${status}</h2>
+          <p>Your ${updatedRecord.reimbursementType} reimbursement request has been <strong>${status}</strong> by HR/Admin.</p>
+          <table border="1" cellpadding="10" style="border-collapse: collapse; width: 100%;">
+            <tr><th style="text-align: left; background-color: #f7fafc; width: 30%;">Status</th><td style="color: ${color}; font-weight: bold;">${status}</td></tr>
+            <tr><th style="text-align: left; background-color: #f7fafc;">Amount</th><td>₹${updatedRecord.amount}</td></tr>
+            <tr><th style="text-align: left; background-color: #f7fafc;">Reason/Notes</th><td>${reason}</td></tr>
+          </table>
+          <br>
+          <p>Please log in to the HR Portal for more details.</p>
+        </div>
+      `;
+      sendEmail({ to: employeeEmail, subject, html }).catch(e => console.error("Email send failed:", e));
+    }
+
     res.json({ success: true, message: `Reimbursement ${status.toLowerCase()}`, data: updatedRecord });
   } catch (error) {
     console.error('Error updating reimbursement status:', error);
