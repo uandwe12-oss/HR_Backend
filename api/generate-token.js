@@ -3,7 +3,7 @@ const readline = require('readline');
 
 const CLIENT_ID = '169258570035-c4qa4ifh2i0e52g2vr7l8bun76kck3c4.apps.googleusercontent.com';
 const CLIENT_SECRET = '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';
-const REDIRECT_URI = 'http://localhost:5000/oauth2callback';
+const REDIRECT_URI = 'https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/oauth2callback';
 
 const oauth2Client = new google.auth.OAuth2(
   CLIENT_ID,
