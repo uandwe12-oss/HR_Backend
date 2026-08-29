@@ -38,8 +38,8 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F539FBD094224A6DB53D387CCCB64655 }}
 
       - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v2
+        uses: azure/webapps-deploy@v3
         with:
           app-name: 'myuandwe'
           slot-name: 'Production'
-          package: .
+          package: '.'
