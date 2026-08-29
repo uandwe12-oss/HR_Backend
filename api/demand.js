@@ -298,35 +298,7 @@ router.post("/", async (req, res) => {
 });
 
 
-// Add to demand.js
-/**
- * POST /api/demand/export/trigger
- * Manually trigger demand export
- */
-router.post("/export/trigger", async (req, res) => {
-  
-  try {
-    const { manualDemandExport } = require('../services/autoExportDemand');
-    const result = await manualDemandExport();
-    res.json(result);
-  } catch (err) {
-    console.error("Manual demand export error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Add this GET version for browser testing (temporary)
-router.get("/export/trigger", async (req, res) => {
-  
-  try {
-    const { manualDemandExport } = require('../services/autoExportDemand');
-    const result = await manualDemandExport();
-    res.json(result);
-  } catch (err) {
-    console.error("Manual demand export error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+// Removed obsolete manual export trigger routes
 
 /**
  * =================================================
