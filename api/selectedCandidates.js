@@ -101,8 +101,8 @@ const addToZone = async (driver, candidateId, demandId, clientName, status, reas
         previousRejection: previousRejection  // Store as JSON string
       });
 
-      console.log(`✅ Updated existing zone entry for candidate ${candidateId}`);
-      console.log("EXISTING CHECK COUNT:", existingCheck.records.length);
+      // console.log(`✅ Updated existing zone entry for candidate ${candidateId}`);
+      // console.log("EXISTING CHECK COUNT:", existingCheck.records.length);
       return true;
     } else {
       // CREATE new entry
@@ -463,7 +463,7 @@ router.put("/status", async (req, res) => {
       await axios.put(`https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net/api/candidates/${candidateId}/progress`, {
         isInProgress: isInProgress
       });
-      console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
+      // console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
     } catch (syncErr) {
       console.error('⚠️ Failed to sync progress status:', syncErr.message);
       // Don't fail the main request if sync fails
@@ -847,14 +847,14 @@ router.put("/status-with-zone", async (req, res) => {
         });
 
         if (zoneResponse.data.success) {
-          console.log(`✅ Added candidate ${candidateId} to Zone for client: ${clientName}`);
+          // console.log(`✅ Added candidate ${candidateId} to Zone for client: ${clientName}`);
         }
       } catch (zoneErr) {
         console.error(`⚠️ Failed to add to Zone:`, zoneErr.message);
       }
     }
 
-    console.log(`✅ Candidate ${candidateId} status updated to ${status}`);
+    // console.log(`✅ Candidate ${candidateId} status updated to ${status}`);
 
     res.json({
       success: true,
