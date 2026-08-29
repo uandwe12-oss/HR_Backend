@@ -2,10 +2,10 @@
   "name": "hr_backend",
   "version": "1.0.0",
   "main": "seedUser.js",
-"scripts": {
-  "start": "node server.js",
-  "dev": "nodemon server.js"
-}
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -33,7 +33,7 @@
     "tmp": "^0.2.5",
     "xlsx": "^0.18.5"
   },
-   "devDependencies": {
+  "devDependencies": {
     "nodemon": "^3.1.14"
   }
 }
