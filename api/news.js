@@ -140,11 +140,53 @@ router.post('/', upload.array('media', 10), async (req, res) => {
       const message = `📰 Company News: ${msgTitle}`;
       const notifNationality = (nationality || 'ALL').toUpperCase();
 
+      // Send Emails
+      try {
+        const usersResult = await session.run(`
+          MATCH (u:User)
+          OPTIONAL MATCH (p:PersonalDetails {userId: u.username})
+          WITH DISTINCT u, coalesce(p.nationality, 'ALL') AS userNat, coalesce(p.profileStatus, 'PENDING') AS pStatus
+          WHERE ($nat = 'ALL' OR userNat = $nat OR userNat = '' OR userNat IS NULL)
+            AND (u.role IN ['Admin', 'HR', 'Finance', 'Management'] OR pStatus = 'APPROVED')
+          RETURN u.email AS email
+        `, { nat: notifNationality });
+
+        const { sendEmail } = require('../services/emailService');
+        const emailPromises = usersResult.records.map(async (record) => {
+          const recipientEmail = record.get("email");
+          if (recipientEmail) {
+            try {
+              await sendEmail({
+                to: recipientEmail,
+                subject: msgTitle,
+                html: `
+                  <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                    <h2>Hello,</h2>
+                    <p>A new announcement has been posted in the <b>Company News Feed</b>.</p>
+                    <p><strong>${msgTitle}</strong></p>
+                    <p>Please log in to the portal to view the details.</p>
+                    <br/>
+                    <p>Best Regards,</p>
+                    <p>Your HR Team</p>
+                  </div>
+                `
+              });
+            } catch (e) {
+              console.error("Failed to send email to", recipientEmail, e);
+            }
+          }
+        });
+        await Promise.all(emailPromises);
+      } catch (err) {
+        console.error("Failed to process email notifications:", err);
+      }
+
       await session.run(`
         MATCH (u:User)
         OPTIONAL MATCH (p:PersonalDetails {userId: u.username})
-        WITH u, coalesce(p.nationality, 'ALL') AS userNat
-        WHERE $nat = 'ALL' OR userNat = $nat OR userNat = '' OR userNat IS NULL
+        WITH DISTINCT u, coalesce(p.nationality, 'ALL') AS userNat, coalesce(p.profileStatus, 'PENDING') AS pStatus
+        WHERE ($nat = 'ALL' OR userNat = $nat OR userNat = '' OR userNat IS NULL)
+          AND (u.role IN ['Admin', 'HR', 'Finance', 'Management'] OR pStatus = 'APPROVED')
         CREATE (n:Notification {
           id: randomUUID(),
           userId: u.username,
