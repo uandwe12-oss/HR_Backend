@@ -17,7 +17,10 @@ router.post("/", async (req, res) => {
   }
   
   try {
-    const teamId = crypto.randomUUID();
+    const countResult = await session.run(`MATCH (t:Team) RETURN count(t) as count`);
+    const cVal = countResult.records[0].get('count');
+    const count = typeof cVal.toNumber === 'function' ? cVal.toNumber() : Number(cVal);
+    const teamId = `team_${count + 1}`;
     const createdAt = new Date().toISOString();
     
     // Create the Team node
@@ -55,6 +58,19 @@ router.post("/", async (req, res) => {
       MERGE (u)-[:MEMBER_OF]->(t)
     `, { members, id: teamId });
     
+    // Create notifications for members
+    await session.run(`
+      UNWIND $members AS memberId
+      CREATE (n:Notification {
+        id: randomUUID(),
+        userId: memberId,
+        type: "TEAM_ASSIGNMENT",
+        message: "You have been assigned to the team '" + $name + "'.",
+        isRead: false,
+        createdAt: $createdAt
+      })
+    `, { members, name, createdAt });
+
     res.json({ success: true, message: "Team created successfully", data: { id: teamId, name } });
   } catch (error) {
     console.error("Error creating team:", error);
@@ -257,6 +273,21 @@ router.put("/:id", async (req, res) => {
         MATCH (u:User {username: memberId}), (t:Team {id: $id})
         MERGE (u)-[:MEMBER_OF]->(t)
       `, { members, id });
+
+      // Create notifications for members
+      const createdAt = new Date().toISOString();
+      await session.run(`
+        MATCH (t:Team {id: $id})
+        UNWIND $members AS memberId
+        CREATE (n:Notification {
+          id: randomUUID(),
+          userId: memberId,
+          type: "TEAM_ASSIGNMENT_UPDATE",
+          message: "Your team assignment has been updated to '" + t.name + "'.",
+          isRead: false,
+          createdAt: $createdAt
+        })
+      `, { members, id, createdAt });
     }
     
     res.json({ success: true, message: "Team updated successfully" });
