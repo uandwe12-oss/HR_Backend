@@ -703,7 +703,7 @@ router.put("/release/reject/:assetId", async (req, res) => {
 // Approve Asset Submission
 router.put("/approve-submission/:id", async (req, res) => {
   const { id } = req.params;
-  console.log(`Approving submission for ID: ${id}`);
+  // console.log(`Approving submission for ID: ${id}`);
   const driver = getDriver();
   const session = driver.session();
   try {
@@ -713,7 +713,7 @@ router.put("/approve-submission/:id", async (req, res) => {
       RETURN a
     `, { id });
     if (result.records.length > 0) {
-      console.log(`Successfully approved submission ${id}`);
+      // console.log(`Successfully approved submission ${id}`);
       const node = result.records[0].get("a").properties;
       if (node.employee_number) {
         await session.run(`
