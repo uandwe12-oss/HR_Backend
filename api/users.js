@@ -5,7 +5,7 @@ const bcrypt = require("bcrypt");
 // Import the shared driver helper
 const getDriver = require("../lib/neo4j");
 
-const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", "Employee", "HR", "Sales", "Pending"];
+const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", "Employee", "HR", "Sales", "Finance", "Pending", "Rejected"];
 
 /**
  * =================================================
@@ -29,6 +29,8 @@ router.get("/", async (req, res) => {
                 COALESCE(p.firstName + ' ' + p.lastName, p.fullName, u.name) as name,
                 u.role as role,
                 u.assignedClient as assignedClient,
+                p.assignedCompany as assignedCompany,
+                p.nationality as nationality,
                 COALESCE(p.employeeNumber, u.pid) as pid,
                 u.createdAt as createdAt,
                 p.profileStatus as approvalStatus
@@ -39,11 +41,13 @@ router.get("/", async (req, res) => {
                 COALESCE(p.firstName + ' ' + p.lastName, p.fullName) as name,
                 'Employee' as role,
                 null as assignedClient,
+                p.assignedCompany as assignedCompany,
+                p.nationality as nationality,
                 p.employeeNumber as pid,
                 p.createdAt as createdAt,
                 p.profileStatus as approvalStatus
        }
-       RETURN username, name, role, assignedClient, pid, createdAt, approvalStatus
+       RETURN username, name, role, assignedClient, assignedCompany, nationality, pid, createdAt, approvalStatus
        ORDER BY createdAt DESC`
     );
 
@@ -57,12 +61,16 @@ router.get("/", async (req, res) => {
       const pid = record.get("pid"); // This will be null initially
       const createdAt = record.get("createdAt");
       const approvalStatus = record.get("approvalStatus");
+      const assignedCompany = record.get("assignedCompany");
+      const nationality = record.get("nationality");
       
       return {
         username: username,
         name: name || null,
         role: role,
         assignedClient: assignedClient || null,
+        assignedCompany: assignedCompany || null,
+        nationality: nationality || null,
         pid: pid || null, // Return null if no PID exists
         createdAt: createdAt ? new Date(createdAt).toISOString() : null,
         approvalStatus: approvalStatus || "PENDING"
@@ -576,9 +584,11 @@ router.delete("/:username", async (req, res) => {
       });
     }
 
-    // Delete user
+    // Delete user, their relationships, and their floating PersonalDetails node
     await session.run(
-      "MATCH (u:User {username: $username}) DELETE u",
+      `MATCH (u:User {username: $username})
+       OPTIONAL MATCH (p:PersonalDetails {emailId: $username})
+       DETACH DELETE u, p`,
       { username }
     );
 
