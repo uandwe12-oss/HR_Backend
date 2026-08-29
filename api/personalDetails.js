@@ -226,8 +226,10 @@ const RETURN_FIELDS = `
   .aadharNumber,
   .aadharDocumentLink,
   .ssnNumber,
+  .ssnDocumentLink,
   .nationalId,
   .nationalIdDocumentLink,
+  .higherSchoolCertificateLink,
   .panNumber,
   .panDocumentLink,
   .tenthCertificateLink,
@@ -275,10 +277,14 @@ const RETURN_FIELDS = `
   .relievingLetter1Link,
   .relievingLetter2Link,
   .pfPassbookLink,
+  .pfNumber,
   .previousUan,
   .firstTimeEmployment,
   .pfNomineeName,
-  .pfNomineeRelationship
+  .pfNomineeRelationship,
+  .previousPayslip1Link,
+  .previousPayslip2Link,
+  .previousPayslip3Link
 `;
 
 
@@ -291,7 +297,7 @@ router.get("/", async (req, res) => {
   }
 
   const session = driver.session();
-  const { userId, email, pid } = req.query;
+  const { userId, email, pid, nationality } = req.query;
 
   try {
     if (userId) {
@@ -382,12 +388,21 @@ router.get("/", async (req, res) => {
     }
 
     // Fetch all
+    let query = `MATCH (p:PersonalDetails)`;
+    let params = {};
 
-    const result = await session.run(
-      `MATCH (p:PersonalDetails)
-       RETURN p { ${RETURN_FIELDS} } as personalDetails
-       ORDER BY p.createdAt DESC`
-    );
+    if (nationality) {
+      if (nationality.toLowerCase() === 'india') {
+        query += ` WHERE toLower(p.nationality) = toLower($nationality) OR p.nationality IS NULL OR p.nationality = ''`;
+      } else {
+        query += ` WHERE toLower(p.nationality) = toLower($nationality)`;
+      }
+      params.nationality = nationality;
+    }
+
+    query += ` RETURN p { ${RETURN_FIELDS} } as personalDetails ORDER BY p.createdAt DESC`;
+
+    const result = await session.run(query, params);
 
     const personalDetails = result.records.map(r => {
       const details = r.get("personalDetails");
@@ -421,6 +436,7 @@ router.post("/", (req, res, next) => {
     { name: 'aadharDocument', maxCount: 1 },
     { name: 'panDocument', maxCount: 1 },
     { name: 'nationalIdDocument', maxCount: 1 },
+    { name: 'higherSchoolCertificate', maxCount: 1 },
     { name: 'tenthCertificate', maxCount: 1 },
     { name: 'twelfthCertificate', maxCount: 1 },
     { name: 'resumeDocument', maxCount: 1 },
@@ -430,7 +446,11 @@ router.post("/", (req, res, next) => {
     { name: 'postGraduationCertificate', maxCount: 1 },
     { name: 'relievingLetter1', maxCount: 1 },
     { name: 'relievingLetter2', maxCount: 1 },
-    { name: 'pfPassbook', maxCount: 1 }
+    { name: 'pfPassbook', maxCount: 1 },
+    { name: 'ssnDocument', maxCount: 1 },
+    { name: 'previousPayslip1', maxCount: 1 },
+    { name: 'previousPayslip2', maxCount: 1 },
+    { name: 'previousPayslip3', maxCount: 1 }
   ]);
 
  uploadMiddleware(req, res, (err) => {
@@ -487,6 +507,7 @@ router.post("/", (req, res, next) => {
     bankAccountNumber,
     ifscCode,
     bankBranch,
+    pfNumber,
     previousUan,
     firstTimeEmployment,
     pfNomineeName,
@@ -497,6 +518,8 @@ router.post("/", (req, res, next) => {
   const aadharDocumentFile = files?.aadharDocument?.[0];
   const panFile = files?.panDocument?.[0];
   const nationalIdDocFile = files?.nationalIdDocument?.[0];
+  const higherSchoolCertFile = files?.higherSchoolCertificate?.[0];
+  const ssnDocFile = files?.ssnDocument?.[0];
   const tenthCertFile = files?.tenthCertificate?.[0];
   const twelfthCertFile = files?.twelfthCertificate?.[0];
   const resumeFile = files?.resumeDocument?.[0];
@@ -507,13 +530,16 @@ router.post("/", (req, res, next) => {
   const relievingLetter1File = files?.relievingLetter1?.[0];
   const relievingLetter2File = files?.relievingLetter2?.[0];
   const pfPassbookFile = files?.pfPassbook?.[0];
+  const previousPayslip1File = files?.previousPayslip1?.[0];
+  const previousPayslip2File = files?.previousPayslip2?.[0];
+  const previousPayslip3File = files?.previousPayslip3?.[0];
 
   try {
 
-    if (!userId || !firstName || !lastName || !gender || !mobileNumber || !dateOfBirth || !nationality) {
+    if (!userId || !nationality) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields"
+        message: "Missing required fields: userId or nationality"
       });
     }
 
@@ -592,6 +618,46 @@ router.post("/", (req, res, next) => {
         return res.status(500).json({
           success: false,
           message: "Failed to upload National ID document",
+          error: uploadResult.error
+        });
+      }
+    }
+
+    // Upload Higher School Certificate to Google Drive
+    let higherSchoolCertificateLink = null;
+    if (higherSchoolCertFile) {
+      const uploadResult = await googleDrive.uploadHigherSchoolCertificate(
+        higherSchoolCertFile.buffer,
+        higherSchoolCertFile.originalname,
+        higherSchoolCertFile.mimetype,
+        userId
+      );
+      if (uploadResult.success) {
+        higherSchoolCertificateLink = uploadResult.viewLink;
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload Higher School Certificate",
+          error: uploadResult.error
+        });
+      }
+    }
+
+    // Upload SSN document to Google Drive
+    let ssnDocumentLink = null;
+    if (ssnDocFile) {
+      const uploadResult = await googleDrive.uploadSsnDocument(
+        ssnDocFile.buffer,
+        ssnDocFile.originalname,
+        ssnDocFile.mimetype,
+        userId
+      );
+      if (uploadResult.success) {
+        ssnDocumentLink = uploadResult.viewLink;
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload SSN document",
           error: uploadResult.error
         });
       }
@@ -742,6 +808,36 @@ router.post("/", (req, res, next) => {
       }
     }
 
+    let previousPayslip1Link = null;
+    if (previousPayslip1File) {
+      const uploadResult = await googleDrive.uploadPreviousPayslip1(
+        previousPayslip1File.buffer, previousPayslip1File.originalname, previousPayslip1File.mimetype, userId
+      );
+      if (uploadResult.success) {
+        previousPayslip1Link = uploadResult.viewLink;
+      }
+    }
+
+    let previousPayslip2Link = null;
+    if (previousPayslip2File) {
+      const uploadResult = await googleDrive.uploadPreviousPayslip2(
+        previousPayslip2File.buffer, previousPayslip2File.originalname, previousPayslip2File.mimetype, userId
+      );
+      if (uploadResult.success) {
+        previousPayslip2Link = uploadResult.viewLink;
+      }
+    }
+
+    let previousPayslip3Link = null;
+    if (previousPayslip3File) {
+      const uploadResult = await googleDrive.uploadPreviousPayslip3(
+        previousPayslip3File.buffer, previousPayslip3File.originalname, previousPayslip3File.mimetype, userId
+      );
+      if (uploadResult.success) {
+        previousPayslip3Link = uploadResult.viewLink;
+      }
+    }
+
     // Generate full name
     const fullName = [firstName, middleName, lastName]
       .filter(n => n && n.trim())
@@ -795,8 +891,10 @@ router.post("/", (req, res, next) => {
         aadharNumber: $aadharNumber,
         aadharDocumentLink: $aadharDocumentLink,
         ssnNumber: $ssnNumber,
+        ssnDocumentLink: $ssnDocumentLink,
         nationalId: $nationalId,
         nationalIdDocumentLink: $nationalIdDocumentLink,
+        higherSchoolCertificateLink: $higherSchoolCertificateLink,
         panNumber: $panNumber,
         panDocumentLink: $panDocumentLink,
         tenthCertificateLink: $tenthCertificateLink,
@@ -831,10 +929,14 @@ router.post("/", (req, res, next) => {
         relievingLetter1Link: $relievingLetter1Link,
         relievingLetter2Link: $relievingLetter2Link,
         pfPassbookLink: $pfPassbookLink,
+        pfNumber: $pfNumber,
         previousUan: $previousUan,
         firstTimeEmployment: $firstTimeEmployment,
         pfNomineeName: $pfNomineeName,
         pfNomineeRelationship: $pfNomineeRelationship,
+        previousPayslip1Link: $previousPayslip1Link,
+        previousPayslip2Link: $previousPayslip2Link,
+        previousPayslip3Link: $previousPayslip3Link,
         createdAt: $createdAt,
         updatedAt: $updatedAt,
         profileStatus: 'PENDING',
@@ -857,8 +959,10 @@ router.post("/", (req, res, next) => {
         aadharNumber: aadharNumber || "",
         aadharDocumentLink: aadharDocumentLink || null,
         ssnNumber: ssnNumber || "",
+        ssnDocumentLink: ssnDocumentLink || null,
         nationalId: nationalId || "",
         nationalIdDocumentLink: nationalIdDocumentLink || null,
+        higherSchoolCertificateLink: higherSchoolCertificateLink || null,
         panNumber: panNumber || "",
         panDocumentLink: panLink || null,
         tenthCertificateLink: tenthCertificateLink || null,
@@ -893,10 +997,14 @@ router.post("/", (req, res, next) => {
         relievingLetter1Link: relievingLetter1Link || null,
         relievingLetter2Link: relievingLetter2Link || null,
         pfPassbookLink: pfPassbookLink || null,
+        pfNumber: pfNumber || "",
         previousUan: previousUan || "",
         firstTimeEmployment: firstTimeEmployment || "",
         pfNomineeName: pfNomineeName || "",
         pfNomineeRelationship: pfNomineeRelationship || "",
+        previousPayslip1Link: previousPayslip1Link || null,
+        previousPayslip2Link: previousPayslip2Link || null,
+        previousPayslip3Link: previousPayslip3Link || null,
         createdAt: currentTime,
         updatedAt: currentTime,
         submittedAt: currentTime
@@ -904,11 +1012,25 @@ router.post("/", (req, res, next) => {
     );
 
     // Update User node with the generated PID
-
     await session.run(
       `MATCH (u:User {username: $userId})
        SET u.pid = $pid`,
       { userId, pid: pidToUse }
+    );
+
+    // Create notification for Admin
+    const adminMessage = `New Personal Details submitted by ${firstName} ${lastName || ''} (${userId}).`;
+    await session.run(
+      `MATCH (admin:User {role: 'Admin'})
+       CREATE (n:Notification {
+         id: randomUUID(),
+         userId: admin.username,
+         type: "PERSONAL_DETAILS_SUBMISSION",
+         message: $message,
+         isRead: false,
+         createdAt: $currentTime
+       })`,
+      { message: adminMessage, currentTime }
     );
 
 
@@ -942,6 +1064,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
     { name: 'aadharDocument', maxCount: 1 },
     { name: 'panDocument', maxCount: 1 },
     { name: 'nationalIdDocument', maxCount: 1 },
+    { name: 'higherSchoolCertificate', maxCount: 1 },
     { name: 'tenthCertificate', maxCount: 1 },
     { name: 'twelfthCertificate', maxCount: 1 },
     { name: 'resumeDocument', maxCount: 1 },
@@ -951,7 +1074,11 @@ router.put("/resubmit/:userId", (req, res, next) => {
     { name: 'postGraduationCertificate', maxCount: 1 },
     { name: 'relievingLetter1', maxCount: 1 },
     { name: 'relievingLetter2', maxCount: 1 },
-    { name: 'pfPassbook', maxCount: 1 }
+    { name: 'pfPassbook', maxCount: 1 },
+    { name: 'ssnDocument', maxCount: 1 },
+    { name: 'previousPayslip1', maxCount: 1 },
+    { name: 'previousPayslip2', maxCount: 1 },
+    { name: 'previousPayslip3', maxCount: 1 }
   ]);
 
   uploadMiddleware(req, res, (err) => {
@@ -968,19 +1095,21 @@ router.put("/resubmit/:userId", (req, res, next) => {
   const {
     firstName, middleName, lastName, emailId, personalEmailId,
     gender, mobileNumber, emergencyNumber, emergencyRelationship, aadharNumber,
-    ssnNumber, nationalId, panNumber, dateOfBirth, nationality,
+    ssnNumber, nationalId, passportNumber, drivingLicense, panNumber, dateOfBirth, nationality,
     maritalStatus, employeeNumber, assignedCompany, selectedDemand,
     currentResidentialAddress, permanentResidentialAddress,
     city, state, jobTitle, employmentStartDate, employmentLocation,
     visaType, visaEndDate, supervisor, hr, skills,
     bankName, bankAccountNumber, ifscCode, bankBranch,
-    previousUan, firstTimeEmployment, pfNomineeName, pfNomineeRelationship
+    pfNumber, previousUan, firstTimeEmployment, pfNomineeName, pfNomineeRelationship
   } = req.body;
 
   const files = req.files || {};
   const aadharDocumentFile = files?.aadharDocument?.[0];
   const panFile = files?.panDocument?.[0];
   const nationalIdDocFile = files?.nationalIdDocument?.[0];
+  const higherSchoolCertFile = files?.higherSchoolCertificate?.[0];
+  const ssnDocFile = files?.ssnDocument?.[0];
   const tenthCertFile = files?.tenthCertificate?.[0];
   const twelfthCertFile = files?.twelfthCertificate?.[0];
   const resumeFile = files?.resumeDocument?.[0];
@@ -991,28 +1120,18 @@ router.put("/resubmit/:userId", (req, res, next) => {
   const relievingLetter1File = files?.relievingLetter1?.[0];
   const relievingLetter2File = files?.relievingLetter2?.[0];
   const pfPassbookFile = files?.pfPassbook?.[0];
+  const previousPayslip1File = files?.previousPayslip1?.[0];
+  const previousPayslip2File = files?.previousPayslip2?.[0];
+  const previousPayslip3File = files?.previousPayslip3?.[0];
 
   try {
-    if (!userId || !firstName || !lastName || !gender || !mobileNumber || !dateOfBirth) {
-      return res.status(400).json({ success: false, message: "Missing required fields" });
+    if (!userId || !nationality) {
+      return res.status(400).json({ success: false, message: "Missing required fields: userId or nationality" });
     }
 
     // Check that user's profile status is REJECTED
     const userCheck = await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId})        RETURN p.profileStatus as status, 
-              p.aadharDocumentLink as oldAadharDocumentLink,
-              p.nationalIdDocumentLink as oldNationalIdDocumentLink,
-              p.panDocumentLink as oldPanLink,
-              p.tenthCertificateLink as oldTenthCertLink,
-              p.twelfthCertificateLink as oldTwelfthCertLink,
-              p.resumeDocumentLink as oldResumeLink,
-              p.visaDocumentLink as oldVisaDocLink,
-              p.profilePhotoLink as oldProfilePhotoLink,
-              p.graduationCertificateLink as oldGraduationCertLink,
-              p.postGraduationCertificateLink as oldPostGraduationCertLink,
-              p.relievingLetter1Link as oldRelievingLetter1Link,
-              p.relievingLetter2Link as oldRelievingLetter2Link,
-              p.pfPassbookLink as oldPfPassbookLink`,
+      `MATCH (p:PersonalDetails {userId: $userId}) RETURN p`,
       { userId }
     );
 
@@ -1020,20 +1139,40 @@ router.put("/resubmit/:userId", (req, res, next) => {
       return res.status(404).json({ success: false, message: "Profile not found" });
     }
 
-    const currentStatus = userCheck.records[0].get("status");
-    let oldAadharDocumentLink = userCheck.records[0].get("oldAadharDocumentLink");
-    let oldNationalIdDocumentLink = userCheck.records[0].get("oldNationalIdDocumentLink") || null;
-    let oldPanLink = userCheck.records[0].get("oldPanLink");
-    let oldTenthCertLink = userCheck.records[0].get("oldTenthCertLink") || null;
-    let oldTwelfthCertLink = userCheck.records[0].get("oldTwelfthCertLink") || null;
-    let oldResumeLink = userCheck.records[0].get("oldResumeLink") || null;
-    let oldVisaDocLink = userCheck.records[0].get("oldVisaDocLink") || null;
-    let oldProfilePhotoLink = userCheck.records[0].get("oldProfilePhotoLink") || null;
-    let oldGraduationCertLink = userCheck.records[0].get("oldGraduationCertLink") || null;
-    let oldPostGraduationCertLink = userCheck.records[0].get("oldPostGraduationCertLink") || null;
-    let oldRelievingLetter1Link = userCheck.records[0].get("oldRelievingLetter1Link") || null;
-    let oldRelievingLetter2Link = userCheck.records[0].get("oldRelievingLetter2Link") || null;
-    let oldPfPassbookLink = userCheck.records[0].get("oldPfPassbookLink") || null;
+    const pProps = userCheck.records[0].get("p").properties;
+    const currentStatus = pProps.profileStatus;
+    
+    // Preserve old document links
+    let oldAadharDocumentLink = pProps.aadharDocumentLink || null;
+    let oldNationalIdDocumentLink = pProps.nationalIdDocumentLink || null;
+    let oldHigherSchoolCertificateLink = pProps.higherSchoolCertificateLink || null;
+    let oldSsnDocumentLink = pProps.ssnDocumentLink || null;
+    let oldPanLink = pProps.panDocumentLink || null;
+    let oldTenthCertLink = pProps.tenthCertificateLink || null;
+    let oldTwelfthCertLink = pProps.twelfthCertificateLink || null;
+    let oldResumeLink = pProps.resumeDocumentLink || null;
+    let oldVisaDocLink = pProps.visaDocumentLink || null;
+    let oldProfilePhotoLink = pProps.profilePhotoLink || null;
+    let oldGraduationCertLink = pProps.graduationCertificateLink || null;
+    let oldPostGraduationCertLink = pProps.postGraduationCertificateLink || null;
+    let oldRelievingLetter1Link = pProps.relievingLetter1Link || null;
+    let oldRelievingLetter2Link = pProps.relievingLetter2Link || null;
+    let oldPfPassbookLink = pProps.pfPassbookLink || null;
+    let oldPreviousPayslip1Link = pProps.previousPayslip1Link || null;
+    let oldPreviousPayslip2Link = pProps.previousPayslip2Link || null;
+    let oldPreviousPayslip3Link = pProps.previousPayslip3Link || null;
+
+    // Preserve Admin-allocated fields that the employee form doesn't send
+    const adminJobTitle = pProps.jobTitle || "";
+    const adminEmployeeNumber = pProps.employeeNumber || "";
+    const adminAssignedCompany = pProps.assignedCompany || "";
+    const adminSelectedDemand = pProps.selectedDemand || "";
+    const adminEmploymentStartDate = pProps.employmentStartDate || "";
+    const adminEmploymentLocation = pProps.employmentLocation || "";
+    const adminVisaType = pProps.visaType || "";
+    const adminVisaEndDate = pProps.visaEndDate || "";
+    const adminSupervisor = pProps.supervisor || "";
+    const adminHr = pProps.hr || "";
 
     if (currentStatus && currentStatus !== 'REJECTED') {
       return res.status(403).json({
@@ -1112,6 +1251,56 @@ router.put("/resubmit/:userId", (req, res, next) => {
         return res.status(500).json({
           success: false,
           message: "Failed to upload National ID document",
+          error: uploadResult.error
+        });
+      }
+    }
+
+    // Upload new Higher School Certificate if provided
+    let higherSchoolCertificateLink = oldHigherSchoolCertificateLink;
+    if (higherSchoolCertFile) {
+      if (oldHigherSchoolCertificateLink) {
+        const oldFileId = extractDriveFileId(oldHigherSchoolCertificateLink);
+        if (oldFileId) await googleDrive.deleteFileFromDrive(oldFileId);
+      }
+
+      const uploadResult = await googleDrive.uploadHigherSchoolCertificate(
+        higherSchoolCertFile.buffer,
+        higherSchoolCertFile.originalname,
+        higherSchoolCertFile.mimetype,
+        userId
+      );
+      if (uploadResult.success) {
+        higherSchoolCertificateLink = uploadResult.viewLink;
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload Higher School Certificate",
+          error: uploadResult.error
+        });
+      }
+    }
+
+    // Upload new SSN Document if provided
+    let ssnDocumentLink = oldSsnDocumentLink;
+    if (ssnDocFile) {
+      if (oldSsnDocumentLink) {
+        const oldFileId = extractDriveFileId(oldSsnDocumentLink);
+        await googleDrive.deleteFileFromDrive(oldFileId);
+      }
+
+      const uploadResult = await googleDrive.uploadSsnDocument(
+        ssnDocFile.buffer,
+        ssnDocFile.originalname,
+        ssnDocFile.mimetype,
+        userId
+      );
+      if (uploadResult.success) {
+        ssnDocumentLink = uploadResult.viewLink;
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload SSN document",
           error: uploadResult.error
         });
       }
@@ -1276,6 +1465,42 @@ router.put("/resubmit/:userId", (req, res, next) => {
       if (uploadResult.success) { pfPassbookLink = uploadResult.viewLink; }
     }
 
+    let previousPayslip1Link = oldPreviousPayslip1Link;
+    if (previousPayslip1File) {
+      if (oldPreviousPayslip1Link) {
+        const oldFileId = extractDriveFileId(oldPreviousPayslip1Link);
+        await googleDrive.deleteFileFromDrive(oldFileId);
+      }
+      const uploadResult = await googleDrive.uploadPreviousPayslip1(
+        previousPayslip1File.buffer, previousPayslip1File.originalname, previousPayslip1File.mimetype, userId
+      );
+      if (uploadResult.success) { previousPayslip1Link = uploadResult.viewLink; }
+    }
+
+    let previousPayslip2Link = oldPreviousPayslip2Link;
+    if (previousPayslip2File) {
+      if (oldPreviousPayslip2Link) {
+        const oldFileId = extractDriveFileId(oldPreviousPayslip2Link);
+        await googleDrive.deleteFileFromDrive(oldFileId);
+      }
+      const uploadResult = await googleDrive.uploadPreviousPayslip2(
+        previousPayslip2File.buffer, previousPayslip2File.originalname, previousPayslip2File.mimetype, userId
+      );
+      if (uploadResult.success) { previousPayslip2Link = uploadResult.viewLink; }
+    }
+
+    let previousPayslip3Link = oldPreviousPayslip3Link;
+    if (previousPayslip3File) {
+      if (oldPreviousPayslip3Link) {
+        const oldFileId = extractDriveFileId(oldPreviousPayslip3Link);
+        await googleDrive.deleteFileFromDrive(oldFileId);
+      }
+      const uploadResult = await googleDrive.uploadPreviousPayslip3(
+        previousPayslip3File.buffer, previousPayslip3File.originalname, previousPayslip3File.mimetype, userId
+      );
+      if (uploadResult.success) { previousPayslip3Link = uploadResult.viewLink; }
+    }
+
     // Delete existing PersonalDetails node
     await session.run(
       `MATCH (p:PersonalDetails {userId: $userId}) DETACH DELETE p`,
@@ -1331,8 +1556,10 @@ router.put("/resubmit/:userId", (req, res, next) => {
         aadharNumber: $aadharNumber,
         aadharDocumentLink: $aadharDocumentLink,
         ssnNumber: $ssnNumber,
+        ssnDocumentLink: $ssnDocumentLink,
         nationalId: $nationalId,
         nationalIdDocumentLink: $nationalIdDocumentLink,
+        higherSchoolCertificateLink: $higherSchoolCertificateLink,
         panNumber: $panNumber,
         panDocumentLink: $panDocumentLink,
         tenthCertificateLink: $tenthCertificateLink,
@@ -1367,10 +1594,14 @@ router.put("/resubmit/:userId", (req, res, next) => {
         relievingLetter1Link: $relievingLetter1Link,
         relievingLetter2Link: $relievingLetter2Link,
         pfPassbookLink: $pfPassbookLink,
+        pfNumber: $pfNumber,
         previousUan: $previousUan,
         firstTimeEmployment: $firstTimeEmployment,
         pfNomineeName: $pfNomineeName,
         pfNomineeRelationship: $pfNomineeRelationship,
+        previousPayslip1Link: $previousPayslip1Link,
+        previousPayslip2Link: $previousPayslip2Link,
+        previousPayslip3Link: $previousPayslip3Link,
         createdAt: $createdAt,
         updatedAt: $updatedAt,
         profileStatus: 'PENDING',
@@ -1393,8 +1624,10 @@ router.put("/resubmit/:userId", (req, res, next) => {
         aadharNumber: aadharNumber || "",
         aadharDocumentLink: aadharDocumentLink,
         ssnNumber: ssnNumber || "",
+        ssnDocumentLink: ssnDocumentLink,
         nationalId: nationalId || "",
         nationalIdDocumentLink: nationalIdDocumentLink,
+        higherSchoolCertificateLink: higherSchoolCertificateLink,
         panNumber: panNumber || "",
         panDocumentLink: panLink,
         tenthCertificateLink: tenthCertificateLink,
@@ -1412,16 +1645,16 @@ router.put("/resubmit/:userId", (req, res, next) => {
         permanentResidentialAddress: permanentResidentialAddress || "",
         city: city || "",
         state: state || "",
-        jobTitle: jobTitle || "",
-        employeeNumber: employeeNumber || "",
-        assignedCompany: assignedCompany || "",
-        selectedDemand: selectedDemand || "",
-        employmentStartDate: employmentStartDate || "",
-        employmentLocation: employmentLocation || "",
-        visaType: visaType || "",
-        visaEndDate: visaEndDate || "",
-        supervisor: supervisor || "",
-        hr: hr || "",
+        jobTitle: adminJobTitle,
+        employeeNumber: adminEmployeeNumber,
+        assignedCompany: adminAssignedCompany,
+        selectedDemand: adminSelectedDemand,
+        employmentStartDate: adminEmploymentStartDate,
+        employmentLocation: adminEmploymentLocation,
+        visaType: adminVisaType,
+        visaEndDate: adminVisaEndDate,
+        supervisor: adminSupervisor,
+        hr: adminHr,
         bankName: bankName || "",
         bankAccountNumber: bankAccountNumber || "",
         ifscCode: ifscCode || "",
@@ -1429,10 +1662,14 @@ router.put("/resubmit/:userId", (req, res, next) => {
         relievingLetter1Link: relievingLetter1Link || null,
         relievingLetter2Link: relievingLetter2Link || null,
         pfPassbookLink: pfPassbookLink || null,
+        pfNumber: pfNumber || "",
         previousUan: previousUan || "",
         firstTimeEmployment: firstTimeEmployment || "",
         pfNomineeName: pfNomineeName || "",
         pfNomineeRelationship: pfNomineeRelationship || "",
+        previousPayslip1Link: previousPayslip1Link || null,
+        previousPayslip2Link: previousPayslip2Link || null,
+        previousPayslip3Link: previousPayslip3Link || null,
         createdAt: currentTime,
         updatedAt: currentTime,
         submittedAt: currentTime
@@ -1453,6 +1690,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
       pid: pidToUse,
       aadharDocumentLink: aadharDocumentLink,
       nationalIdDocumentLink: nationalIdDocumentLink,
+      higherSchoolCertificateLink: higherSchoolCertificateLink,
       panDocumentLink: panLink,
       tenthCertificateLink: tenthCertificateLink,
       twelfthCertificateLink: twelfthCertificateLink,
