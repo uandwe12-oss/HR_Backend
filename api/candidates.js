@@ -8,7 +8,6 @@ const { google } = require('googleapis');
 const { Readable } = require('stream');
 const XLSX = require('xlsx');
 // Add this line after your other requires
-const { manualExport } = require('../services/autoExport');
 require("dotenv").config();
 
 // At the very top of candidates.js, update this line:
@@ -70,7 +69,7 @@ async function authorize() {
 
 const uploadToGoogleDrive = async (file, candidateName) => {
   try {
-    console.log('📤 Uploading to Google Drive via shared service...');
+    // console.log('📤 Uploading to Google Drive via shared service...');
 
     // Create temp file from buffer
     const tempDir = path.join(__dirname, '../temp');
@@ -112,7 +111,7 @@ const uploadToGoogleDrive = async (file, candidateName) => {
 
 const saveFileLocally = (file, candidateName) => {
   try {
-    console.log('📁 Saving file locally as fallback...');
+    // console.log('📁 Saving file locally as fallback...');
 
     // Define upload directory
     const uploadDir = path.join(__dirname, '../uploads');
@@ -127,7 +126,7 @@ const saveFileLocally = (file, candidateName) => {
     const filePath = path.join(uploadDir, filename);
 
     fs.writeFileSync(filePath, file.buffer);
-    console.log('✅ File saved locally at:', filePath);
+    // console.log('✅ File saved locally at:', filePath);
 
     return {
       resumePath: `/uploads/${filename}`,
@@ -143,9 +142,9 @@ const saveFileLocally = (file, candidateName) => {
 // ============================================
 // NEO4J CONNECTION
 // ============================================
-console.log("\n" + "=".repeat(50));
-console.log("🔌 Initializing Neo4j Connection for Candidate Profiles...");
-console.log("=".repeat(50));
+// console.log("\n" + "=".repeat(50));
+// console.log("🔌 Initializing Neo4j Connection for Candidate Profiles...");
+// console.log("=".repeat(50));
 
 let driver;
 try {
@@ -153,7 +152,7 @@ try {
   const user = process.env.NEO4J_USER || 'neo4j';
   const password = process.env.NEO4J_PASSWORD || '5CFMv9N5rc4lJgSnXJm68eYpRw4DynDCov-0Fyy3m1Q';
 
-  console.log(`📡 Connecting to Neo4j at: ${uri}`);
+  // console.log(`📡 Connecting to Neo4j at: ${uri}`);
 
   driver = neo4j.driver(
     uri,
@@ -1318,13 +1317,13 @@ router.post("/", upload.single('resume'), async (req, res) => {
         googleDriveFileId = driveResult.googleDriveFileId;
         googleDriveViewLink = driveResult.googleDriveViewLink;
         googleDriveDownloadLink = driveResult.googleDriveDownloadLink;
-        console.log("✅ Resume stored in Google Drive");
+        // console.log("✅ Resume stored in Google Drive");
       } else {
         // Fallback to local storage
         const localResult = saveFileLocally(req.file, req.body.name);
         if (localResult) {
           resumePath = localResult.resumePath;
-          console.log("✅ Resume stored locally");
+          // console.log("✅ Resume stored locally");
         }
       }
     }
@@ -1664,24 +1663,24 @@ router.put("/:id", upload.single('resume'), async (req, res) => {
           const oldResumePath = path.join(__dirname, '..', formattedExisting.resumePath);
           if (fs.existsSync(oldResumePath)) {
             fs.unlinkSync(oldResumePath);
-            console.log("✅ Old local resume deleted");
+            // console.log("✅ Old local resume deleted");
           }
         }
         
         // If there was an old Google Drive file, delete it
         if (formattedExisting.googleDriveFileId) {
           await deleteFileFromDrive(formattedExisting.googleDriveFileId);
-          console.log("✅ Old Google Drive resume deleted");
+          // console.log("✅ Old Google Drive resume deleted");
         }
 
         resumePath = null;
-        console.log("✅ New resume stored in Google Drive");
+        // console.log("✅ New resume stored in Google Drive");
       } else {
         // Fallback to local storage
         const localResult = saveFileLocally(req.file, req.body.name);
         if (localResult) {
           resumePath = localResult.resumePath;
-          console.log("✅ New resume stored locally");
+          // console.log("✅ New resume stored locally");
         }
       }
     }
@@ -1789,7 +1788,7 @@ router.delete("/:id", async (req, res) => {
 
     // Delete from Google Drive if file exists
     if (formatted.googleDriveFileId) {
-      console.log(`🗑️ Deleting from Google Drive: ${formatted.googleDriveFileId}`);
+      // console.log(`🗑️ Deleting from Google Drive: ${formatted.googleDriveFileId}`);
       await deleteFileFromDrive(formatted.googleDriveFileId);
     }
 
@@ -1798,7 +1797,7 @@ router.delete("/:id", async (req, res) => {
       const resumeFilePath = path.join(__dirname, '..', formatted.resumePath);
       if (fs.existsSync(resumeFilePath)) {
         fs.unlinkSync(resumeFilePath);
-        console.log("✅ Local resume deleted");
+        // console.log("✅ Local resume deleted");
       }
     }
 
@@ -1948,32 +1947,7 @@ router.get("/export/status", async (req, res) => {
   }
 });
 
-// Change from GET to POST
-router.post("/export/trigger", async (req, res) => {
-
-  try {
-    const { manualExport } = require('../services/autoExport');
-    const result = await manualExport();
-
-    res.json(result);
-  } catch (err) {
-    console.error("Manual export error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-// Temporary GET version for browser testing
-router.get("/export/trigger", async (req, res) => {
-
-  try {
-    const { manualExport } = require('../services/autoExport');
-    const result = await manualExport();
-
-    res.json(result);
-  } catch (err) {
-    console.error("Manual export error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+// Removed obsolete manual export trigger routes
 
 router.get("/export/excel", async (req, res) => {
 
@@ -2087,7 +2061,7 @@ router.get("/export/excel", async (req, res) => {
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
     res.send(buffer);
 
-    console.log(`✅ Excel export completed for ${candidates.length} candidates`);
+    // console.log(`✅ Excel export completed for ${candidates.length} candidates`);
 
   } catch (err) {
     console.error("❌ Error exporting candidates to Excel:", err);
