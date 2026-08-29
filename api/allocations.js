@@ -125,8 +125,15 @@ router.post("/", async (req, res) => {
   }
   
   try {
-    const id = crypto.randomUUID();
-    const createdAt = new Date().toISOString();
+    const countResult = await session.run(`
+        MATCH (a:Allocation {employeeNumber: $employeeNumber})
+        RETURN count(a) as count
+      `, { employeeNumber });
+      
+      const countValue = countResult.records[0].get('count');
+      const count = countValue && typeof countValue.toNumber === 'function' ? countValue.toNumber() : Number(countValue);
+      const id = `${employeeNumber}_alloc_${count + 1}`;
+      const createdAt = new Date().toISOString();
     
     // Create the Allocation node and link it to PersonalDetails
     // If the employee exists in PersonalDetails, we attach it.
@@ -144,6 +151,14 @@ router.post("/", async (req, res) => {
         createdAt: $createdAt
       })
       MERGE (p)-[:HAS_ALLOCATION]->(a)
+      CREATE (n:Notification {
+        id: randomUUID(),
+        userId: p.userId,
+        type: "CLIENT_ALLOCATION",
+        message: "You have been allocated to the client/project '" + $projectName + "'.",
+        isRead: false,
+        createdAt: $createdAt
+      })
       RETURN a
     `, {
       employeeNumber,
@@ -182,12 +197,20 @@ router.put("/:id", async (req, res) => {
     const updatedAt = new Date().toISOString();
     
     const result = await session.run(`
-      MATCH (a:Allocation {id: $id})
+      MATCH (p:PersonalDetails)-[:HAS_ALLOCATION]->(a:Allocation {id: $id})
       SET a.projectName = $projectName,
           a.type = $type,
           a.startDate = $startDate,
           a.endDate = $endDate,
           a.updatedAt = $updatedAt
+      CREATE (n:Notification {
+        id: randomUUID(),
+        userId: p.userId,
+        type: "CLIENT_ALLOCATION_UPDATE",
+        message: "Your client/project allocation has been updated to '" + $projectName + "'.",
+        isRead: false,
+        createdAt: $updatedAt
+      })
       RETURN a
     `, { id, projectName: projectName || "", type, startDate, endDate, updatedAt });
     
