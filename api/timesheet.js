@@ -40,25 +40,27 @@ router.get("/user/:userId", async (req, res) => {
     // A. Fetch User details to get the client (for holiday group)
     const pdResult = await session.run(`
       MATCH (pd:PersonalDetails {userId: $userId})
-      RETURN pd.assignedCompany AS client, pd.employmentLocation AS location, pd.employeeName AS employeeName, pd.employeeNumber AS employeeNumber
+      RETURN pd.assignedCompany AS client, pd.employmentLocation AS location, pd.employeeName AS employeeName, pd.employeeNumber AS employeeNumber, pd.nationality AS nationality
     `, { userId });
 
     let client = null;
     let location = null;
     let employeeName = userId;
     let employeeNumber = "";
+    let nationality = "";
     if (pdResult.records.length > 0) {
       client = pdResult.records[0].get("client");
       location = pdResult.records[0].get("location");
       employeeName = pdResult.records[0].get("employeeName") || userId;
       employeeNumber = pdResult.records[0].get("employeeNumber") || "";
+      nationality = pdResult.records[0].get("nationality") || "";
     }
 
     // B. Fetch Holidays for this client
     let holidays = [];
     let queryClient = client || "UANDWE"; // Default to company if no client assigned
     let exactGroupName = location && client ? `${location.replace(/\s+/g, '')}${client.replace(/\s+/g, '')}` : queryClient;
-    console.log("DEBUG: location =", location, "client =", client, "exactGroupName =", exactGroupName);
+    // console.log("DEBUG: location =", location, "client =", client, "exactGroupName =", exactGroupName);
 
     let holidayResult = await session.run(`
       MATCH (g:Group {name: $exactGroupName})
@@ -116,19 +118,21 @@ router.get("/user/:userId", async (req, res) => {
 
     // D. Fetch Manual Exceptions (e.g. Overtime, Short Hours)
     const exceptionResult = await session.run(`
-      MATCH (e:TimesheetException {userId: $userId})
-      WHERE e.date STARTS WITH $monthPrefix
-      RETURN e.date AS date, e.hours AS hours, e.type AS type, e.reason AS reason
+      MATCH (tr:TimesheetRecord {userId: $userId, monthStr: $monthPrefix})
+      RETURN tr.exceptionsData AS exceptionsData
     `, { userId, monthPrefix: monthParam });
     
-    const exceptions = {};
-    exceptionResult.records.forEach(r => {
-      exceptions[r.get("date")] = {
-        hours: r.get("hours"),
-        type: r.get("type"), // 'Overtime', 'Short', 'Weekend Work'
-        reason: r.get("reason")
-      };
-    });
+    let exceptions = {};
+    if (exceptionResult.records.length > 0) {
+      const dataStr = exceptionResult.records[0].get("exceptionsData");
+      if (dataStr) {
+        try {
+          exceptions = JSON.parse(dataStr);
+        } catch(e) {
+          console.error("Error parsing exceptionsData JSON:", e);
+        }
+      }
+    }
 
     // E. Fetch Month Record Status
     const recordResult = await session.run(`
@@ -150,7 +154,9 @@ router.get("/user/:userId", async (req, res) => {
     const timesheetDays = [];
     
     let totalWorkingHours = 0;
-    let totalOvertimeHours = 0;
+    let totalOvertimeHours = 0; // Existing calculated OT
+    let totalExplicitOvertime = 0; // New explicit OT for USA
+    let totalMileage = 0; // New mileage for USA
     let totalLopDays = 0;
     let totalLeaveDays = 0;
     let totalHolidays = 0;
@@ -208,6 +214,10 @@ router.get("/user/:userId", async (req, res) => {
           hours = exception.hours;
         }
         notes = exception.reason || notes;
+        
+        // Sum explicit OT and Mileage
+        totalExplicitOvertime += parseFloat(exception.overtimeHours) || 0;
+        totalMileage += parseFloat(exception.mileage) || 0;
       }
 
       totalWorkingHours += hours;
@@ -246,16 +256,20 @@ router.get("/user/:userId", async (req, res) => {
         employeeName,
         employeeNumber,
         client,
+        nationality,
         monthStr: monthParam,
         status: recordStatus,
         updatedAt: recordUpdatedAt,
-        approvedBy,
+        approvedBy: approvedBy,
+        days: timesheetDays,
+        totalWorkingHours,
+        totalOvertimeHours,
+        totalExplicitOvertime,
+        totalMileage,
+        totalLopDays,
+        totalLeaveDays,
+        totalHolidays,
         summary: {
-          totalWorkingHours,
-          totalOvertimeHours,
-          totalLopDays,
-          totalLeaveDays,
-          totalHolidays,
           weeklyHours: Object.keys(weeklyHoursMap).map(week => {
             const weekHours = weeklyHoursMap[week];
             const explicitOT = weeklyExplicitOvertimeMap[week] || 0;
@@ -266,8 +280,7 @@ router.get("/user/:userId", async (req, res) => {
               overtime: Math.max(calculatedOT, explicitOT)
             };
           })
-        },
-        days: timesheetDays
+        }
       }
     });
 
@@ -281,32 +294,124 @@ router.get("/user/:userId", async (req, res) => {
 
 /** 
  * 2. POST /api/timesheet/exception
- * Add or update an exception for a specific date
+ * Add/Edit an exception for a specific day.
  */
 router.post("/exception", async (req, res) => {
-  const { userId, date, hours, reason, type } = req.body;
-  if (!userId || !date) return res.status(400).json({ success: false, message: "userId and date required" });
+  const { userId, date, hours, reason, type, overtimeHours, mileage } = req.body;
+
+  if (!userId || !date) {
+    return res.status(400).json({ success: false, message: "Missing userId or date" });
+  }
 
   const driver = getDriver();
   const session = driver.session();
 
   try {
-    const id = `tex_${Date.now()}`;
+    const empRes = await session.run(`MATCH (pd:PersonalDetails {userId: $userId}) RETURN pd.employeeNumber AS empNum`, { userId });
+    let employeeNumber = userId;
+    if (empRes.records.length > 0) {
+       employeeNumber = empRes.records[0].get("empNum") || userId;
+    }
+    
+    const monthStr = date.substring(0, 7);
+    const id = `timeexc_${employeeNumber}_${date}`;
+    const updatedAt = new Date().toISOString();
+    
+    // Ensure TimesheetRecord exists for the month
     await session.run(`
-      MERGE (e:TimesheetException {userId: $userId, date: $date})
-      SET e.id = coalesce(e.id, $id),
-          e.hours = $hours,
-          e.reason = $reason,
-          e.type = $type,
-          e.updatedAt = $updatedAt
-    `, {
-      userId, date, hours: parseFloat(hours) || 0, reason: reason || "", type: type || "Manual", id, updatedAt: new Date().toISOString()
-    });
+      MERGE (tr:TimesheetRecord {userId: $userId, monthStr: $monthStr})
+    `, { userId, monthStr });
+
+    // Fetch existing exceptions data
+    const trRes = await session.run(`
+      MATCH (tr:TimesheetRecord {userId: $userId, monthStr: $monthStr})
+      RETURN tr.exceptionsData AS exceptionsData
+    `, { userId, monthStr });
+
+    let exceptionsObj = {};
+    if (trRes.records.length > 0) {
+      const dataStr = trRes.records[0].get('exceptionsData');
+      if (dataStr) {
+        try {
+          exceptionsObj = JSON.parse(dataStr);
+        } catch (e) {}
+      }
+    }
+
+    // Add or update exception for this date
+    exceptionsObj[date] = {
+      hours: parseFloat(hours) || 0,
+      reason: reason || '',
+      type: type || '',
+      overtimeHours: parseFloat(overtimeHours) || 0,
+      mileage: parseFloat(mileage) || 0,
+      id,
+      updatedAt
+    };
+
+    const newExceptionsData = JSON.stringify(exceptionsObj);
+
+    // Save updated exceptions back to TimesheetRecord
+    await session.run(`
+      MATCH (tr:TimesheetRecord {userId: $userId, monthStr: $monthStr})
+      SET tr.exceptionsData = $newExceptionsData
+    `, { userId, monthStr, newExceptionsData });
 
     res.json({ success: true, message: "Exception saved successfully" });
   } catch (error) {
     console.error("Error saving exception:", error);
     res.status(500).json({ success: false, message: "Failed to save exception" });
+  } finally {
+    await session.close();
+  }
+});
+
+/** 
+ * 2.1 DELETE /api/timesheet/exception
+ * Delete an exception for a specific day.
+ */
+router.delete("/exception", async (req, res) => {
+  const { userId, date } = req.body;
+
+  if (!userId || !date) {
+    return res.status(400).json({ success: false, message: "Missing userId or date" });
+  }
+
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    const monthStr = date.substring(0, 7);
+    
+    const trRes = await session.run(`
+      MATCH (tr:TimesheetRecord {userId: $userId, monthStr: $monthStr})
+      RETURN tr.exceptionsData AS exceptionsData
+    `, { userId, monthStr });
+
+    let exceptionsObj = {};
+    if (trRes.records.length > 0) {
+      const dataStr = trRes.records[0].get('exceptionsData');
+      if (dataStr) {
+        try {
+          exceptionsObj = JSON.parse(dataStr);
+        } catch (e) {}
+      }
+    }
+
+    if (exceptionsObj[date]) {
+      delete exceptionsObj[date];
+      const newExceptionsData = JSON.stringify(exceptionsObj);
+
+      await session.run(`
+        MATCH (tr:TimesheetRecord {userId: $userId, monthStr: $monthStr})
+        SET tr.exceptionsData = $newExceptionsData
+      `, { userId, monthStr, newExceptionsData });
+    }
+
+    res.json({ success: true, message: "Exception deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting exception:", error);
+    res.status(500).json({ success: false, message: "Failed to delete exception" });
   } finally {
     await session.close();
   }
@@ -326,7 +431,15 @@ router.post("/status", async (req, res) => {
   const session = driver.session();
 
   try {
-    const id = `trec_${Date.now()}`;
+    const empRes = await session.run(`MATCH (pd:PersonalDetails {userId: $userId}) RETURN pd.employeeNumber AS empNum`, { userId });
+    let employeeNumber = userId;
+    if (empRes.records.length > 0) {
+       employeeNumber = empRes.records[0].get("empNum") || userId;
+    }
+
+    // Using monthStr ensures unique ID per month
+    const id = `timesherec_${employeeNumber}_${monthStr}`;
+    const updatedAt = new Date().toISOString();
     await session.run(`
       MERGE (tr:TimesheetRecord {userId: $userId, monthStr: $monthStr})
       SET tr.id = coalesce(tr.id, $id),
@@ -341,7 +454,7 @@ router.post("/status", async (req, res) => {
       totalWorkingHours: totals?.totalWorkingHours || 0,
       totalOvertimeHours: totals?.totalOvertimeHours || 0,
       totalLopDays: totals?.totalLopDays || 0,
-      updatedAt: new Date().toISOString()
+      updatedAt
     });
 
     res.json({ success: true, message: `Timesheet ${status} successfully` });
