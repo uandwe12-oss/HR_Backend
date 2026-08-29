@@ -3,7 +3,7 @@ const router = express.Router();
 const getDriver = require("../lib/neo4j");
 const crypto = require("crypto");
 const multer = require("multer");
-const { uploadPayslip, uploadChinaPayslip } = require("../services/googleDrive");
+const { uploadPayslip, uploadChinaPayslip, uploadUSAPayslip } = require("../services/googleDrive");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -43,7 +43,25 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       housingFundEmployer = 0,
       otherCost = 0,
       employerCost = 0,
-      country = 'India'
+      country = 'India',
+      regularHours = 0,
+      regularRate = 0,
+      regularTotal = 0,
+      overtimeHours = 0,
+      overtimeRate = 0,
+      overtimeTotal = 0,
+      mileage = 0,
+      mileageRate = 0,
+      mileageTotal = 0,
+      employeeDentalDeduction = 0,
+      employeeDentalContribution = 0,
+      employeeMedicalDeduction = 0,
+      employeeMedicalContribution = 0,
+      federalIncomeTax = 0,
+      caStateIncomeTax = 0,
+      caSdi = 0,
+      netPay = 0,
+      checkAmount = 0
     } = req.body;
 
     if (!employeeNumber || !month || !year || baseSalary === undefined) {
@@ -56,6 +74,13 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       let uploadResult;
       if (country === 'China') {
         uploadResult = await uploadChinaPayslip(
+          req.file.buffer, 
+          req.file.originalname, 
+          req.file.mimetype, 
+          `${employeeNumber}_${month}_${year}`
+        );
+      } else if (country === 'USA' || country === 'United States') {
+        uploadResult = await uploadUSAPayslip(
           req.file.buffer, 
           req.file.originalname, 
           req.file.mimetype, 
@@ -137,7 +162,16 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       console.error("Error parsing otherDeductionsList", e);
     }
 
-    const dynamicOtherDeductionsAmount = parsedOtherDeductionsList.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+    const dynamicOtherDeductionsAmount = parsedOtherDeductionsList.reduce((sum, item) => {
+      if (item.type === 'addition') return sum;
+      return sum + (parseFloat(item.amount) || 0);
+    }, 0);
+
+    const dynamicOtherAdditionsAmount = parsedOtherDeductionsList.reduce((sum, item) => {
+      if (item.type === 'addition') return sum + (parseFloat(item.amount) || 0);
+      return sum;
+    }, 0);
+
     const parsedOtherDeductions = pEmployerPf + pProfessionalTax + pInsurance + pGratuity + dynamicOtherDeductionsAmount;
 
     let totalReimbursements = 0;
@@ -162,7 +196,8 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
     const workedDays = totalDaysInMonth - totalLopDays;
     const calculatedLopAmount = dailySalary * totalLopDays;
     
-    const finalSalaryCalculated = parsedBaseSalary + parsedAllowances - parsedOtherDeductions - calculatedLopAmount + totalReimbursements;
+    // finalSalaryCalculated handles base, allowances, custom additions, LOP, reimbursements, and all deductions.
+    const finalSalaryCalculated = parsedBaseSalary + parsedAllowances + dynamicOtherAdditionsAmount - parsedOtherDeductions - calculatedLopAmount + totalReimbursements;
     const finalReason = deductionReasons.join(', ');
     const now = new Date().toISOString();
 
@@ -220,6 +255,19 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
             p.housingFundEmployer = $housingFundEmployer,
             p.otherCost = $otherCost,
             p.employerCost = $employerCost,
+            p.regularHours = $regularHours,
+            p.regularRate = $regularRate,
+            p.regularTotal = $regularTotal,
+            p.employeeDentalDeduction = $employeeDentalDeduction,
+            p.employeeDentalContribution = $employeeDentalContribution,
+            p.employeeMedicalDeduction = $employeeMedicalDeduction,
+            p.employeeMedicalContribution = $employeeMedicalContribution,
+            p.federalIncomeTax = $federalIncomeTax,
+            p.caStateIncomeTax = $caStateIncomeTax,
+            p.caSdi = $caSdi,
+            p.netPay = $netPay,
+            p.checkAmount = $checkAmount,
+            p.country = $country,
             p.updatedAt = $updatedAt,
             p.needsRecalculation = false,
             p.recalculationReason = null
@@ -268,11 +316,30 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         housingFundEmployer: parseFloat(housingFundEmployer) || 0,
         otherCost: parseFloat(otherCost) || 0,
         employerCost: parseFloat(employerCost) || 0,
+        regularHours: parseFloat(regularHours) || 0,
+        regularRate: parseFloat(regularRate) || 0,
+        regularTotal: parseFloat(regularTotal) || 0,
+        overtimeHours: parseFloat(overtimeHours) || 0,
+        overtimeRate: parseFloat(overtimeRate) || 0,
+        overtimeTotal: parseFloat(overtimeTotal) || 0,
+        mileage: parseFloat(mileage) || 0,
+        mileageRate: parseFloat(mileageRate) || 0,
+        mileageTotal: parseFloat(mileageTotal) || 0,
+        employeeDentalDeduction: parseFloat(employeeDentalDeduction) || 0,
+        employeeDentalContribution: parseFloat(employeeDentalContribution) || 0,
+        employeeMedicalDeduction: parseFloat(employeeMedicalDeduction) || 0,
+        employeeMedicalContribution: parseFloat(employeeMedicalContribution) || 0,
+        federalIncomeTax: parseFloat(federalIncomeTax) || 0,
+        caStateIncomeTax: parseFloat(caStateIncomeTax) || 0,
+        caSdi: parseFloat(caSdi) || 0,
+        netPay: parseFloat(netPay) || 0,
+        checkAmount: parseFloat(checkAmount) || 0,
+        country: country || 'India',
         updatedAt: now
       });
     } else {
       // Create new record
-      const id = crypto.randomUUID();
+      const id = `${employeeNumber}_${month}_${year}`;
       result = await session.run(`
         CREATE (p:PayrollRecord {
           id: $id,
@@ -322,6 +389,25 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
           housingFundEmployer: $housingFundEmployer,
           otherCost: $otherCost,
           employerCost: $employerCost,
+          regularHours: $regularHours,
+          regularRate: $regularRate,
+          regularTotal: $regularTotal,
+          overtimeHours: $overtimeHours,
+          overtimeRate: $overtimeRate,
+          overtimeTotal: $overtimeTotal,
+          mileage: $mileage,
+          mileageRate: $mileageRate,
+          mileageTotal: $mileageTotal,
+          employeeDentalDeduction: $employeeDentalDeduction,
+          employeeDentalContribution: $employeeDentalContribution,
+          employeeMedicalDeduction: $employeeMedicalDeduction,
+          employeeMedicalContribution: $employeeMedicalContribution,
+          federalIncomeTax: $federalIncomeTax,
+          caStateIncomeTax: $caStateIncomeTax,
+          caSdi: $caSdi,
+          netPay: $netPay,
+          checkAmount: $checkAmount,
+          country: $country,
           createdAt: $createdAt,
           updatedAt: $createdAt,
           needsRecalculation: false
@@ -370,6 +456,25 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         housingFundEmployer: parseFloat(housingFundEmployer) || 0,
         otherCost: parseFloat(otherCost) || 0,
         employerCost: parseFloat(employerCost) || 0,
+        regularHours: parseFloat(regularHours) || 0,
+        regularRate: parseFloat(regularRate) || 0,
+        regularTotal: parseFloat(regularTotal) || 0,
+        overtimeHours: parseFloat(overtimeHours) || 0,
+        overtimeRate: parseFloat(overtimeRate) || 0,
+        overtimeTotal: parseFloat(overtimeTotal) || 0,
+        mileage: parseFloat(mileage) || 0,
+        mileageRate: parseFloat(mileageRate) || 0,
+        mileageTotal: parseFloat(mileageTotal) || 0,
+        employeeDentalDeduction: parseFloat(employeeDentalDeduction) || 0,
+        employeeDentalContribution: parseFloat(employeeDentalContribution) || 0,
+        employeeMedicalDeduction: parseFloat(employeeMedicalDeduction) || 0,
+        employeeMedicalContribution: parseFloat(employeeMedicalContribution) || 0,
+        federalIncomeTax: parseFloat(federalIncomeTax) || 0,
+        caStateIncomeTax: parseFloat(caStateIncomeTax) || 0,
+        caSdi: parseFloat(caSdi) || 0,
+        netPay: parseFloat(netPay) || 0,
+        checkAmount: parseFloat(checkAmount) || 0,
+        country: country || 'India',
         payslipUrl: payslipUrl || '', createdAt: now 
       });
     }
@@ -383,9 +488,9 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
           message: '📄 Your payslip for ' + $month + ' ' + $year + ' is now available.',
           type: 'Payroll',
           isRead: false,
-          createdAt: datetime().toISO()
+          createdAt: $createdAt
         })
-      `, { employeeNumber, month, year });
+      `, { employeeNumber, month, year, createdAt: new Date().toISOString() });
 
     res.json({
       success: true,
