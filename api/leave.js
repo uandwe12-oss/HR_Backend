@@ -13,15 +13,15 @@ const upload = multer({
 const DEFAULT_ANNUAL_LEAVE = 11;
 
 // Helper to calculate leave balance stats
-const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
+const calculateBalances = (leaves, nationality, priorLeaves = {}, targetYear = new Date().getFullYear(), targetMonth = new Date().getMonth()) => {
   let wfhUsed = priorLeaves.priorWfhUsed || 0;
   let rawAnnualUsed = priorLeaves.priorAnnualUsed || 0;
   let pendingAnnual = 0;
   let rawSickUsed = priorLeaves.priorSickUsed || 0;
   let pendingSick = 0;
 
-  const currentMonth = new Date().getMonth();
-  const currentYear = new Date().getFullYear();
+  const currentMonth = targetMonth;
+  const currentYear = targetYear;
 
   let monthlyRawAL = 0;
   let monthlyWFH = 0;
@@ -31,23 +31,27 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
       ? parseFloat(leave.actualUsedDays) 
       : (parseFloat(leave.totalDays) || 0);
       
+    let isThisYear = false;
     let isThisMonth = false;
     if (leave.startDate) {
       const ld = new Date(leave.startDate);
-      isThisMonth = ld.getMonth() === currentMonth && ld.getFullYear() === currentYear;
+      isThisYear = ld.getFullYear() === currentYear;
+      isThisMonth = ld.getMonth() === currentMonth && isThisYear;
     }
       
     if (leave.status === 'Approved') {
-      if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') {
-        rawAnnualUsed += days;
-        if (isThisMonth) monthlyRawAL += days;
-      } else if (leave.leaveType === 'Sick Leave') {
-        rawSickUsed += days;
-      } else if (leave.leaveType === 'Work From Home') {
+      if (leave.leaveType === 'Work From Home') {
         wfhUsed += days;
         if (isThisMonth) monthlyWFH += days;
+      } else if (isThisYear) {
+        if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') {
+          rawAnnualUsed += days;
+          if (isThisMonth) monthlyRawAL += days;
+        } else if (leave.leaveType === 'Sick Leave') {
+          rawSickUsed += days;
+        }
       }
-    } else if (leave.status === 'Pending') {
+    } else if (leave.status === 'Pending' && isThisYear) {
       if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') {
         pendingAnnual += days;
       } else if (leave.leaveType === 'Sick Leave') {
@@ -56,54 +60,57 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
     }
   });
 
-  let annualEntitlement = DEFAULT_ANNUAL_LEAVE;
-  let sickEntitlement = 0;
+  let annualEntitlement = priorLeaves.allocatedAnnual !== undefined && priorLeaves.allocatedAnnual !== null && priorLeaves.allocatedAnnual !== '' ? parseFloat(priorLeaves.allocatedAnnual) : (nationality === 'INDIA' ? 8 : 11);
+  let sickEntitlement = priorLeaves.allocatedSick !== undefined && priorLeaves.allocatedSick !== null && priorLeaves.allocatedSick !== '' ? parseFloat(priorLeaves.allocatedSick) : (nationality === 'INDIA' ? 3 : 0);
+  let wfhMonthlyCap = priorLeaves.allocatedWfhMonthly !== undefined && priorLeaves.allocatedWfhMonthly !== null && priorLeaves.allocatedWfhMonthly !== '' ? parseFloat(priorLeaves.allocatedWfhMonthly) : Infinity;
 
   let totalSickUsed = rawSickUsed + pendingSick;
   let totalAnnualUsed = rawAnnualUsed + pendingAnnual;
 
-  if (nationality === 'INDIA') {
-    annualEntitlement = 8;
-    sickEntitlement = 3;
-    
-    // Migration: If rawAnnualUsed > 8, shift overflow to Sick if possible
-    if (rawAnnualUsed > annualEntitlement) {
-      const overflow = rawAnnualUsed - annualEntitlement;
-      const sickAvailableForOverflow = sickEntitlement - rawSickUsed;
-      if (overflow <= sickAvailableForOverflow && sickAvailableForOverflow > 0) {
-        rawSickUsed += overflow;
-        rawAnnualUsed = annualEntitlement;
-      } else if (sickAvailableForOverflow > 0) {
-        rawSickUsed += sickAvailableForOverflow;
-        rawAnnualUsed = rawAnnualUsed - sickAvailableForOverflow;
-      }
-      // Recalculate totals after migration
-      totalSickUsed = rawSickUsed + pendingSick;
-      totalAnnualUsed = rawAnnualUsed + pendingAnnual;
+  // Reciprocal Overflow Logic (Applies to all)
+  
+  // 1. Annual overflows into Sick
+  if (rawAnnualUsed > annualEntitlement) {
+    const overflow = rawAnnualUsed - annualEntitlement;
+    const sickAvailableForOverflow = sickEntitlement - rawSickUsed;
+    if (overflow <= sickAvailableForOverflow && sickAvailableForOverflow > 0) {
+      rawSickUsed += overflow;
+      rawAnnualUsed = annualEntitlement;
+    } else if (sickAvailableForOverflow > 0) {
+      rawSickUsed += sickAvailableForOverflow;
+      rawAnnualUsed = rawAnnualUsed - sickAvailableForOverflow;
     }
-    
-    // NEW: If totalSickUsed > sickEntitlement, overflow extra sick leaves into Annual Leave
-    if (totalSickUsed > sickEntitlement) {
-      const sickOverflow = totalSickUsed - sickEntitlement;
-      totalAnnualUsed += sickOverflow;
-      totalSickUsed = sickEntitlement;
+    totalSickUsed = rawSickUsed + pendingSick;
+    totalAnnualUsed = rawAnnualUsed + pendingAnnual;
+  }
+  
+  // 2. Sick overflows into Annual
+  if (totalSickUsed > sickEntitlement) {
+    const sickOverflow = totalSickUsed - sickEntitlement;
+    totalAnnualUsed += sickOverflow;
+    totalSickUsed = sickEntitlement;
 
-      // Adjust raw variables for accurate "Used" calculations
-      if (rawSickUsed > sickEntitlement) {
-        const rawSickOverflow = rawSickUsed - sickEntitlement;
-        rawAnnualUsed += rawSickOverflow;
-        rawSickUsed = sickEntitlement;
-      }
+    if (rawSickUsed > sickEntitlement) {
+      const rawSickOverflow = rawSickUsed - sickEntitlement;
+      rawAnnualUsed += rawSickOverflow;
+      rawSickUsed = sickEntitlement;
     }
   }
 
   const annualUsed = Math.min(rawAnnualUsed, annualEntitlement);
   const lopUsed = Math.max(0, rawAnnualUsed - annualEntitlement) + Math.max(0, rawSickUsed - sickEntitlement);
   
+  // WFH Monthly LOP
+  let wfhLop = 0;
+  if (wfhMonthlyCap !== Infinity && monthlyWFH > wfhMonthlyCap) {
+    wfhLop = monthlyWFH - wfhMonthlyCap;
+  }
+  const totalLopUsed = lopUsed + wfhLop;
+  
   const rawAnnualBeforeThisMonth = rawAnnualUsed - monthlyRawAL;
   const lopBeforeThisMonth = Math.max(0, rawAnnualBeforeThisMonth - annualEntitlement);
-  const monthlyLOP = Math.max(0, lopUsed - lopBeforeThisMonth);
-  const monthlyAL = monthlyRawAL - monthlyLOP;
+  const monthlyLOP = Math.max(0, lopUsed - lopBeforeThisMonth) + wfhLop;
+  const monthlyAL = monthlyRawAL - Math.max(0, lopUsed - lopBeforeThisMonth);
   
   const annualBalance = Math.max(0, annualEntitlement - totalAnnualUsed);
   const sickBalance = Math.max(0, sickEntitlement - totalSickUsed);
@@ -118,7 +125,8 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}) => {
     sickBalance,
     
     wfhUsed,
-    lopUsed,
+    lopUsed: totalLopUsed,
+    wfhMonthlyCap,
     monthlyAL,
     monthlyWFH,
     monthlyLOP,
@@ -155,25 +163,37 @@ router.get("/user/:userId", async (req, res) => {
       return l;
     });
 
+    const targetYear = parseInt(req.query.year) || new Date().getFullYear();
+    const targetMonth = parseInt(req.query.month) >= 0 && parseInt(req.query.month) <= 11 ? parseInt(req.query.month) : new Date().getMonth();
     const pdResult = await session.run(`
       MATCH (u:User {username: $userId})
       OPTIONAL MATCH (p:PersonalDetails {userId: $userId})
       OPTIONAL MATCH (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
-      RETURN p.nationality as nationality, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed
-    `, { userId });
+      RETURN p.nationality as nationality, 
+             lb.priorAnnualUsed as priorAnnualUsed, 
+             lb.priorSickUsed as priorSickUsed, 
+             lb.priorWfhUsed as priorWfhUsed,
+             lb[$allocatedAnnualKey] as allocatedAnnual,
+             lb[$allocatedSickKey] as allocatedSick,
+             lb.allocatedWfhMonthly as allocatedWfhMonthly
+    `, { userId, allocatedAnnualKey: `allocatedAnnual_${targetYear}`, allocatedSickKey: `allocatedSick_${targetYear}` });
     
-    let nationality = '';
+    let nationality = 'INDIA';
     let priorLeaves = { priorAnnualUsed: 0, priorSickUsed: 0, priorWfhUsed: 0 };
     if (pdResult.records.length > 0) {
-      nationality = pdResult.records[0].get('nationality') || '';
+      const record = pdResult.records[0];
+      nationality = record.get('nationality') || 'INDIA';
       priorLeaves = {
-        priorAnnualUsed: parseFloat(pdResult.records[0].get('priorAnnualUsed')) || 0,
-        priorSickUsed: parseFloat(pdResult.records[0].get('priorSickUsed')) || 0,
-        priorWfhUsed: parseFloat(pdResult.records[0].get('priorWfhUsed')) || 0
+        priorAnnualUsed: parseFloat(record.get('priorAnnualUsed')) || 0,
+        priorSickUsed: parseFloat(record.get('priorSickUsed')) || 0,
+        priorWfhUsed: parseFloat(record.get('priorWfhUsed')) || 0,
+        allocatedAnnual: record.get('allocatedAnnual') !== null ? record.get('allocatedAnnual') : undefined,
+        allocatedSick: record.get('allocatedSick') !== null ? record.get('allocatedSick') : undefined,
+        allocatedWfhMonthly: record.get('allocatedWfhMonthly') !== null ? record.get('allocatedWfhMonthly') : undefined
       };
     }
 
-    const balances = calculateBalances(leaves, nationality, priorLeaves);
+    const balances = calculateBalances(leaves, nationality, priorLeaves, targetYear, targetMonth);
 
     res.json({
       success: true,
@@ -229,12 +249,15 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       RETURN l
     `, { userId });
     
+    const targetYear = new Date(startDate).getFullYear();
+    const targetMonth = new Date(startDate).getMonth();
+
     const pdResult = await session.run(`
       MATCH (u:User {username: $userId})
       OPTIONAL MATCH (p:PersonalDetails {userId: $userId})
       OPTIONAL MATCH (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
-      RETURN p.nationality as nationality, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed
-    `, { userId });
+      RETURN p.nationality as nationality, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed, lb[$allocatedAnnualKey] as allocatedAnnual, lb[$allocatedSickKey] as allocatedSick, lb.allocatedWfhMonthly as allocatedWfhMonthly
+    `, { userId, allocatedAnnualKey: `allocatedAnnual_${targetYear}`, allocatedSickKey: `allocatedSick_${targetYear}` });
     
     let nationality = '';
     let priorLeaves = { priorAnnualUsed: 0, priorSickUsed: 0, priorWfhUsed: 0 };
@@ -243,15 +266,21 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       priorLeaves = {
         priorAnnualUsed: parseFloat(pdResult.records[0].get('priorAnnualUsed')) || 0,
         priorSickUsed: parseFloat(pdResult.records[0].get('priorSickUsed')) || 0,
-        priorWfhUsed: parseFloat(pdResult.records[0].get('priorWfhUsed')) || 0
+        priorWfhUsed: parseFloat(pdResult.records[0].get('priorWfhUsed')) || 0,
+        allocatedAnnual: pdResult.records[0].get('allocatedAnnual') !== null ? pdResult.records[0].get('allocatedAnnual') : undefined,
+        allocatedSick: pdResult.records[0].get('allocatedSick') !== null ? pdResult.records[0].get('allocatedSick') : undefined,
+        allocatedWfhMonthly: pdResult.records[0].get('allocatedWfhMonthly') !== null ? pdResult.records[0].get('allocatedWfhMonthly') : undefined
       };
     }
 
     const existingLeaves = existingResult.records.map(record => record.get('l').properties);
-    const balances = calculateBalances(existingLeaves, nationality, priorLeaves);
+    const balances = calculateBalances(existingLeaves, nationality, priorLeaves, targetYear, targetMonth);
 
+    const normalizedCompany = (company || '').toLowerCase().replace(/\s+/g, '');
+    const wfhEligibleCompanies = ['bangaloreuandwe', 'bangaloreuandwelabs', 'gurugramuandwe'];
+    
     // WFH 1-per-week validation
-    if (leaveType === 'Work From Home' && ['UANDWE Bangalore', 'BangaloreUANDWE', 'bangaloreuandwelabs', 'BangaloreUANDWELabs', 'bangaloreuandwe labs'].includes(company)) {
+    if (leaveType === 'Work From Home' && wfhEligibleCompanies.includes(normalizedCompany)) {
       const isSameWeek = (d1, d2) => {
         const date1 = new Date(d1); const date2 = new Date(d2);
         const day1 = date1.getDay() === 0 ? 7 : date1.getDay();
@@ -308,13 +337,34 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
     const leaveId = `leave_${currentCount + 1}_${employeeNumber}`;
     const createdAt = new Date().toISOString();
     
-    // Check if requester supervises any team
-    const checkSupResult = await session.run(`
+    // Fetch user's team, supervisor, and HR
+    const teamInfoResult = await session.run(`
       MATCH (u:User {username: $userId})
-      OPTIONAL MATCH (u)-[:SUPERVISES]->(anyTeam:Team)
-      RETURN COUNT(anyTeam) > 0 AS isRequesterSupervisor
+      OPTIONAL MATCH (u)-[:MEMBER_OF]->(t:Team)
+      OPTIONAL MATCH (s:User)-[:SUPERVISES]->(t)
+      OPTIONAL MATCH (hr:User)-[:HR_FOR]->(t)
+      RETURN s.username AS supervisorId, hr.username AS hrId
     `, { userId });
-    const isRequesterSupervisor = checkSupResult.records.length > 0 ? checkSupResult.records[0].get('isRequesterSupervisor') : false;
+    
+    let assignedSupervisorId = null;
+    let assignedHrId = null;
+    
+    if (teamInfoResult.records.length > 0) {
+      assignedSupervisorId = teamInfoResult.records[0].get('supervisorId');
+      assignedHrId = teamInfoResult.records[0].get('hrId');
+    }
+
+    const isRequesterSupervisor = (assignedSupervisorId === userId);
+
+    let initialSupervisorStatus = 'N/A';
+    if (assignedSupervisorId && !isRequesterSupervisor) {
+      initialSupervisorStatus = 'Pending';
+    }
+    
+    let initialHrStatus = 'N/A';
+    if (assignedHrId) {
+      initialHrStatus = 'Pending';
+    }
 
     // Create Leave Request
     const result = await session.run(`
@@ -340,7 +390,7 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
         customReason: $customReason,
         status: 'Pending',
         supervisorStatus: $initialSupervisorStatus,
-        hrStatus: 'Pending',
+        hrStatus: $initialHrStatus,
         createdAt: $createdAt
       })
       RETURN l
@@ -350,44 +400,65 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       endDate, endTime: endTime || '', totalDays: daysRequested, 
       annualLeaveDays, lopDays, isLOP, salaryDeductionPercentage, reason,
       customReason: customReason || '', createdAt,
-      initialSupervisorStatus: isRequesterSupervisor ? 'N/A' : 'Pending'
+      initialSupervisorStatus,
+      initialHrStatus
     });
 
-    // Find supervisor and send notification (only if they are an employee)
+    // Target Notifications based on Team Allocation
     const notificationMsg = isLOP 
       ? `Loss Of Pay Leave Request - Employee Name: ${employeeName || userId}, Requested Days: ${daysRequested}, LOP Days: ${lopDays}`
       : `${employeeName || userId} submitted a ${leaveType} request.`;
       
-    if (!isRequesterSupervisor) {
+    let notifiedSomeone = false;
+    
+    // Notify Supervisor
+    if (assignedSupervisorId && !isRequesterSupervisor) {
       await session.run(`
-        MATCH (u:User {username: $userId})-[:MEMBER_OF]->(t:Team)<-[:SUPERVISES]-(s:User)
         CREATE (n:Notification {
           id: randomUUID(),
-          userId: s.username,
+          userId: $assignedSupervisorId,
           message: $message,
           type: 'LEAVE_REQUEST',
           relatedId: $leaveId,
           isRead: false,
           createdAt: $createdAt
         })
-      `, { userId, message: notificationMsg, leaveId, createdAt });
+      `, { assignedSupervisorId, message: notificationMsg, leaveId, createdAt });
+      notifiedSomeone = true;
     }
-
-    // Find HR and send notification
-    await session.run(`
-      MATCH (hr:User)
-      WHERE hr.role = 'HR'
-      
-      CREATE (n:Notification {
-        id: randomUUID(),
-        userId: hr.username,
-        message: $message,
-        type: 'LEAVE_REQUEST',
-        relatedId: $leaveId,
-        isRead: false,
-        createdAt: $createdAt
-      })
-    `, { message: notificationMsg, leaveId, createdAt });
+    
+    // Notify HR (only if different from Supervisor to avoid duplicates)
+    if (assignedHrId && assignedHrId !== assignedSupervisorId) {
+      await session.run(`
+        CREATE (n:Notification {
+          id: randomUUID(),
+          userId: $assignedHrId,
+          message: $message,
+          type: 'LEAVE_REQUEST',
+          relatedId: $leaveId,
+          isRead: false,
+          createdAt: $createdAt
+        })
+      `, { assignedHrId, message: notificationMsg, leaveId, createdAt });
+      notifiedSomeone = true;
+    }
+    
+    // Admin Fallback (if no team/supervisor/hr)
+    if (!notifiedSomeone) {
+      await session.run(`
+        MATCH (admin:User)
+        WHERE admin.role = 'Admin'
+        CREATE (n:Notification {
+          id: randomUUID(),
+          userId: admin.username,
+          message: $message,
+          type: 'LEAVE_REQUEST',
+          relatedId: $leaveId,
+          isRead: false,
+          createdAt: $createdAt
+        })
+      `, { message: notificationMsg, leaveId, createdAt });
+    }
 
     res.json({
       success: true,
@@ -446,10 +517,13 @@ router.put("/admin/user/:userId/prior-leaves", async (req, res) => {
   try {
     const result = await session.run(`
       MATCH (u:User {username: $userId})
+      OPTIONAL MATCH (p:PersonalDetails {userId: $userId})
       MERGE (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
       SET lb.priorAnnualUsed = $priorAnnualUsed,
           lb.priorSickUsed = $priorSickUsed,
-          lb.priorWfhUsed = $priorWfhUsed
+          lb.priorWfhUsed = $priorWfhUsed,
+          lb.userId = $userId,
+          lb.employeeNumber = p.employeeNumber
       RETURN lb
     `, { 
       userId, 
@@ -546,6 +620,87 @@ router.post("/admin/user/:userId/past-leave", async (req, res) => {
   }
 });
 
+// Admin Route to update a past leave record
+router.put("/admin/leave/:id", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { id } = req.params;
+  const { leaveType, startDate, endDate, totalDays, reason } = req.body;
+
+  if (!id || !startDate || !endDate || !leaveType) {
+    return res.status(400).json({ success: false, message: "Missing required fields" });
+  }
+
+  try {
+    const result = await session.run(`
+      MATCH (l:LeaveRequest {id: $id})
+      SET l.leaveType = $leaveType,
+          l.startDate = $startDate,
+          l.endDate = $endDate,
+          l.totalDays = $totalDays,
+          l.actualUsedDays = $totalDays,
+          l.reason = $reason
+      RETURN l
+    `, { id, leaveType, startDate, endDate, totalDays: parseFloat(totalDays), reason });
+
+    if (result.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Leave request not found" });
+    }
+
+    res.json({ success: true, message: "Leave record updated successfully." });
+  } catch (error) {
+    console.error("Error updating leave record:", error);
+    res.status(500).json({ success: false, message: "Failed to update leave record." });
+  } finally {
+    await session.close();
+  }
+});
+
+// Admin Route to allocate leave balances for an employee (year-specific)
+router.post("/admin/user/:userId/allocate-balance", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { userId } = req.params;
+  const { allocatedAnnual, allocatedSick, allocatedWfhMonthly, year } = req.body;
+
+  // Use provided year or current year
+  const targetYear = parseInt(year) || new Date().getFullYear();
+
+  try {
+    const result = await session.run(`
+      MATCH (u:User {username: $userId})
+      OPTIONAL MATCH (p:PersonalDetails {userId: $userId})
+      MERGE (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
+      SET 
+        lb[$allocatedAnnualKey] = $allocatedAnnual,
+        lb[$allocatedSickKey] = $allocatedSick,
+        lb.allocatedWfhMonthly = $allocatedWfhMonthly,
+        lb.userId = $userId,
+        lb.employeeNumber = p.employeeNumber,
+        lb.updatedAt = datetime()
+      RETURN lb
+    `, {
+      userId,
+      allocatedAnnualKey: `allocatedAnnual_${targetYear}`,
+      allocatedSickKey: `allocatedSick_${targetYear}`,
+      allocatedAnnual: allocatedAnnual !== '' && allocatedAnnual !== null && allocatedAnnual !== undefined ? parseFloat(allocatedAnnual) : null,
+      allocatedSick: allocatedSick !== '' && allocatedSick !== null && allocatedSick !== undefined ? parseFloat(allocatedSick) : null,
+      allocatedWfhMonthly: allocatedWfhMonthly !== '' && allocatedWfhMonthly !== null && allocatedWfhMonthly !== undefined ? parseFloat(allocatedWfhMonthly) : null
+    });
+
+    if (result.records.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.json({ success: true, message: `Leave balances allocated for ${targetYear} successfully.` });
+  } catch (error) {
+    console.error("Error allocating leave balances:", error);
+    res.status(500).json({ success: false, message: "Failed to allocate leave balances." });
+  } finally {
+    await session.close();
+  }
+});
+
 // Admin Route to fetch all leave balances
 router.get("/balances", async (req, res) => {
   const driver = getDriver();
@@ -559,8 +714,8 @@ router.get("/balances", async (req, res) => {
       MATCH (u:User)
       OPTIONAL MATCH (u)-[:HAS_LEAVE_BALANCE]->(lb:LeaveBalance)
       OPTIONAL MATCH (p:PersonalDetails {userId: u.username})
-      RETURN u.username as userId, p.nationality as nationality, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed
-    `);
+      RETURN u.username as userId, p.nationality as nationality, lb.priorAnnualUsed as priorAnnualUsed, lb.priorSickUsed as priorSickUsed, lb.priorWfhUsed as priorWfhUsed, lb[$allocatedAnnualKey] as allocatedAnnual, lb[$allocatedSickKey] as allocatedSick, lb.allocatedWfhMonthly as allocatedWfhMonthly
+    `, { allocatedAnnualKey: `allocatedAnnual_${new Date().getFullYear()}`, allocatedSickKey: `allocatedSick_${new Date().getFullYear()}` });
 
     const userLeavesMap = {};
     allLeaves.forEach(l => {
@@ -574,7 +729,10 @@ router.get("/balances", async (req, res) => {
       const priorLeaves = {
         priorAnnualUsed: parseFloat(record.get('priorAnnualUsed')) || 0,
         priorSickUsed: parseFloat(record.get('priorSickUsed')) || 0,
-        priorWfhUsed: parseFloat(record.get('priorWfhUsed')) || 0
+        priorWfhUsed: parseFloat(record.get('priorWfhUsed')) || 0,
+        allocatedAnnual: record.get('allocatedAnnual') !== null ? record.get('allocatedAnnual') : undefined,
+        allocatedSick: record.get('allocatedSick') !== null ? record.get('allocatedSick') : undefined,
+        allocatedWfhMonthly: record.get('allocatedWfhMonthly') !== null ? record.get('allocatedWfhMonthly') : undefined
       };
       const userLeaves = userLeavesMap[userId] || [];
       const calc = calculateBalances(userLeaves, nationality, priorLeaves);
@@ -608,18 +766,24 @@ router.put("/status/:id", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid status" });
     }
 
-    // Get current leave request and check if requester supervises any team
+    // Get current leave request and check team
     const getResult = await session.run(`
       MATCH (l:LeaveRequest {id: $id})
-      OPTIONAL MATCH (u:User {username: l.userId})-[:SUPERVISES]->(t:Team)
-      RETURN l, COUNT(t) > 0 AS isRequesterSupervisor
+      OPTIONAL MATCH (u:User {username: l.userId})-[:MEMBER_OF]->(t:Team)
+      OPTIONAL MATCH (s:User)-[:SUPERVISES]->(t)
+      OPTIONAL MATCH (hr:User)-[:HR_FOR]->(t)
+      RETURN l, s.username AS teamSupervisorId, hr.username AS teamHrId, l.userId AS requesterId
     `, { id });
     
     if (getResult.records.length === 0) {
       return res.status(404).json({ success: false, message: "Leave request not found" });
     }
     const currentLeave = getResult.records[0].get('l').properties;
-    const isRequesterSupervisor = getResult.records[0].get('isRequesterSupervisor');
+    const teamSupervisorId = getResult.records[0].get('teamSupervisorId');
+    const teamHrId = getResult.records[0].get('teamHrId');
+    const requesterId = getResult.records[0].get('requesterId');
+    
+    const isRequesterSupervisor = (teamSupervisorId === requesterId);
 
     let newSupervisorStatus = currentLeave.supervisorStatus || 'Pending';
     let newHrStatus = currentLeave.hrStatus || 'Pending';
@@ -628,7 +792,13 @@ router.put("/status/:id", async (req, res) => {
       newSupervisorStatus = 'N/A'; // Patch old data dynamically
     }
 
-    if (approverRole === 'Supervisor') {
+    // Check if approver is BOTH HR and Supervisor for this team
+    const isApproverBoth = approverId && (approverId === teamSupervisorId) && (approverId === teamHrId);
+
+    if (isApproverBoth) {
+      newSupervisorStatus = status;
+      newHrStatus = status;
+    } else if (approverRole === 'Supervisor') {
       newSupervisorStatus = status;
     } else if (approverRole === 'HR') {
       newHrStatus = status;
