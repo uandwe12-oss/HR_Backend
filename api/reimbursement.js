@@ -61,11 +61,20 @@ router.post('/', upload.single('document'), async (req, res) => {
     const documentUrl = uploadResult.viewLink;
     const currentTime = new Date().toISOString();
 
+    // Count existing reimbursements to generate new ID
+    const countResult = await session.run(
+      `MATCH (r:Reimbursement {employeeNumber: $employeeNumber}) RETURN count(r) AS count`,
+      { employeeNumber }
+    );
+    const rawCount = countResult.records[0].get('count');
+    const count = typeof rawCount.toNumber === 'function' ? rawCount.toNumber() : Number(rawCount) || 0;
+    const reimbursementId = `${employeeNumber}_remb_${count + 1}`;
+
     // Create Neo4j Node and Relationship
     const result = await session.run(
       `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber})
        CREATE (r:Reimbursement {
-         id: randomUUID(),
+         id: $reimbursementId,
          employeeNumber: $employeeNumber,
          employeeName: $employeeName,
          reimbursementType: $reimbursementType,
@@ -100,7 +109,8 @@ router.post('/', upload.single('document'), async (req, res) => {
         description: description || '',
         notes: notes || '',
         documentUrl,
-        currentTime
+        currentTime,
+        reimbursementId
       }
     );
 
