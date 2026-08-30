@@ -30,13 +30,6 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_055E8A391162409BAB432D57F6EDB4CB }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F539FBD094224A6DB53D387CCCB64655 }}
 
-      - name: Enable Azure remote build
-        run: |
-          az webapp config appsettings set \
-            --resource-group "myuandwe" \
-            --name "myuandwe" \
-            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
-
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
