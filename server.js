@@ -5,6 +5,7 @@ const swaggerJsdoc = require("swagger-jsdoc");
 const path = require('path');
 const fs = require('fs');
 const { initializeAllExports } = require('./services/autoExportMaster.js');
+const EXPORT_CONFIGS = require('./services/exportConfigs.js');
 const { startAutoCancelAssetReleaseScheduler } = require('./services/autoCancelAssetRelease.js');
 const { verifyToken } = require('./middleware/auth');
 const app = express();
@@ -14,8 +15,14 @@ const PORT = process.env.PORT || 5000;
 
 async function initializeServices() {
   console.log('\n🔧 Initializing services...');
-  await initializeAllExports();
+
   startAutoCancelAssetReleaseScheduler();
+
+  const exporter = initializeAllExports(EXPORT_CONFIGS);
+
+  await exporter.initAll();
+
+  exporter.startAllSchedulers();
 }
 
 /* ================================
@@ -170,11 +177,15 @@ START SERVER
 
 async function startServer() {
   try {
+    console.log('\n🔧 Initializing services...');
+
     await initializeServices();
+
+    console.log('✅ All services initialized successfully!\n');
 
     app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`✅ All services initialized successfully!\n`);
+      console.log(`📡 Port: ${PORT}`);
     });
 
   } catch (error) {
