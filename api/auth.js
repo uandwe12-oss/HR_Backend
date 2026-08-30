@@ -34,7 +34,7 @@ router.get("/microsoft", async (req, res) => {
   try {
     const response = await pca.getAuthCodeUrl(authCodeUrlParameters);
 
-    console.log("Microsoft login URL generated successfully");
+    // console.log("Microsoft login URL generated successfully");
 
     res.redirect(response);
   } catch (error) {
@@ -55,9 +55,8 @@ router.get("/microsoft/callback", async (req, res) => {
   if (!code) {
     console.error("Microsoft callback did not contain an authorization code");
 
-return res.redirect(
-  "https://uandwe.com/myuandwe/login?error=MissingAuthorizationCode"
-);
+    const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
+    return res.redirect(`${frontendUrl}/login?error=MissingAuthorizationCode`);
   }
 
   const tokenRequest = {
@@ -77,8 +76,8 @@ return res.redirect(
     if (!response || !response.account) {
       console.error("Microsoft account information was not returned");
 
-      return res.redirect(
-"https://uandwe.com/myuandwe/login?error=MicrosoftAccountMissing"      );
+      const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
+      return res.redirect(`${frontendUrl}/login?error=MicrosoftAccountMissing`);
     }
 
     const account = response.account;
@@ -93,13 +92,13 @@ return res.redirect(
     if (!email) {
       console.error("Microsoft email was not returned");
 
-      return res.redirect(
-"https://uandwe.com/myuandwe/login?error=EmailMissing"      );
+      const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
+      return res.redirect(`${frontendUrl}/login?error=EmailMissing`);
     }
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    console.log("Microsoft login email:", normalizedEmail);
+    // console.log("Microsoft login email:", normalizedEmail);
 
     // ==========================================
     // 4. Check User in Neo4j
@@ -113,11 +112,13 @@ return res.redirect(
         `
         MATCH (u:User)
         WHERE toLower(u.username) = $email
+        SET u.loginCount = coalesce(u.loginCount, 0) + 1
         RETURN
           u.username AS username,
           u.role AS role,
           u.name AS name,
-          u.assignedClient AS assignedClient
+          u.assignedClient AS assignedClient,
+          u.loginCount AS loginCount
         `,
         {
           email: normalizedEmail,
@@ -142,7 +143,8 @@ return res.redirect(
             username: $email,
             role: "Pending",
             name: $name,
-            createdAt: $createdAt
+            createdAt: $createdAt,
+            loginCount: 1
           })
           WITH u
           MATCH (admin:User {role: 'Admin'})
@@ -167,6 +169,7 @@ return res.redirect(
         var role = "Pending";
         var name = displayName;
         var assignedClient = null;
+        var isFirstLogin = true;
 
       } else {
         // ==========================================
@@ -179,11 +182,14 @@ return res.redirect(
         var role = record.get("role");
         var name = record.get("name") || normalizedEmail;
         var assignedClient = record.get("assignedClient");
+        
+        const loginCount = record.get("loginCount").toNumber ? record.get("loginCount").toNumber() : record.get("loginCount");
+        var isFirstLogin = loginCount === 1;
 
-        console.log(
-          "Neo4j user found:",
-          username
-        );
+        // console.log(
+        //   "Neo4j user found:",
+        //   username
+        // );
       }
 
       // ==========================================
@@ -195,6 +201,7 @@ return res.redirect(
         name: name,
         role: role,
         clientName: assignedClient,
+        isFirstLogin: isFirstLogin
       };
 
       // ==========================================
@@ -208,25 +215,23 @@ return res.redirect(
         userObj,
         jwtSecret,
         {
-          expiresIn: "1h",
+          expiresIn: "12h",
         }
       );
 
-      console.log(
-        "JWT generated successfully for:",
-        normalizedEmail
-      );
+      // console.log(
+      //   "JWT generated successfully for:",
+      //   normalizedEmail
+      // );
 
       // ==========================================
       // 7. Redirect to React SSO Callback
       // ==========================================
 
-  res.redirect(
-  `https://uandwe.com/myuandwe/sso-callback?token=${encodeURIComponent(
-    token
-  )}`
-);
-
+      const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
+      res.redirect(
+        `${frontendUrl}/sso-callback?token=${encodeURIComponent(token)}`
+      );
     } finally {
       await session.close();
     }
@@ -251,11 +256,10 @@ return res.redirect(
     console.error("Correlation ID:", error.correlationId);
     console.error("Full error:", error);
 
-    return res.redirect(
-"https://uandwe.com/myuandwe/login?error=SSOFailed"    );
+    const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
+    return res.redirect(`${frontendUrl}/login?error=SSOFailed`);
   }
 });
-
 
 // ==========================================
 // Export Router
