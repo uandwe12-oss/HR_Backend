@@ -10,6 +10,7 @@ const EXPORT_CONFIGS = [
     priorityKeys: ['Can_ID', 'id', 'email', 'name', 'phone', 'status', 'googleDriveViewLink'],
     cronSchedule: '0 0 * * *' // 12:00 AM
   },
+  
   {
     moduleName: 'Demand',
     query: 'MATCH (d:Demand) OPTIONAL MATCH (d)-[:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile) RETURN d, count(c) AS selectedCount ORDER BY d.createdDate DESC',
