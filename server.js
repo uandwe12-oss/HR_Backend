@@ -5,7 +5,6 @@ const swaggerJsdoc = require("swagger-jsdoc");
 const path = require('path');
 const fs = require('fs');
 const { initializeAllExports } = require('./services/autoExportMaster.js');
-const EXPORT_CONFIGS = require('./services/exportConfigs.js');
 const { startAutoCancelAssetReleaseScheduler } = require('./services/autoCancelAssetRelease.js');
 const { verifyToken } = require('./middleware/auth');
 const app = express();
@@ -15,9 +14,7 @@ const PORT = process.env.PORT || 5000;
 
 async function initializeServices() {
   console.log('\n🔧 Initializing services...');
-  await initAutoExport();
-  startAutoExportScheduler();
-  startDemandAutoExportScheduler();
+  await initializeAllExports();
   startAutoCancelAssetReleaseScheduler();
 }
 
