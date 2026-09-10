@@ -1710,6 +1710,146 @@ router.put("/resubmit/:userId", (req, res, next) => {
 });
 
 
+// ─── Admin Document Replace Route ──────────────────────────────────────────────
+// Accepts a single file upload, deletes old Drive file, uploads new one, updates DB link
+router.put("/admin-update-document/:userId", (req, res, next) => {
+  const singleUpload = upload.single('document');
+  singleUpload(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
+  const driver = getDriver();
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  const session = driver.session();
+  const { userId } = req.params;
+  const { documentType } = req.body;
+  const file = req.file;
+
+  if (!file) {
+    return res.status(400).json({ success: false, message: "No file uploaded" });
+  }
+  if (!documentType) {
+    return res.status(400).json({ success: false, message: "documentType is required" });
+  }
+
+  // Map documentType → { uploadFn, dbField, deleteFn }
+  const DOC_MAP = {
+    aadharDocument:          { uploadFn: 'uploadAadharImage',            dbField: 'aadharDocumentLink',            useAadhar: true },
+    panDocument:             { uploadFn: 'uploadPanImage',               dbField: 'panDocumentLink',               useAadhar: true },
+    nationalIdDocument:      { uploadFn: 'uploadNationalIdDocument',     dbField: 'nationalIdDocumentLink' },
+    ssnDocument:             { uploadFn: 'uploadSsnDocument',            dbField: 'ssnDocumentLink' },
+    tenthCertificate:        { uploadFn: 'uploadTenthCertificate',       dbField: 'tenthCertificateLink' },
+    twelfthCertificate:      { uploadFn: 'uploadTwelfthCertificate',     dbField: 'twelfthCertificateLink' },
+    graduationCertificate:   { uploadFn: 'uploadGraduationCertificate',  dbField: 'graduationCertificateLink' },
+    postGraduationCertificate: { uploadFn: 'uploadPostGraduationCertificate', dbField: 'postGraduationCertificateLink' },
+    resumeDocument:          { uploadFn: 'uploadResume',                 dbField: 'resumeDocumentLink' },
+    visaDocument:            { uploadFn: 'uploadVisaDocument',           dbField: 'visaDocumentLink' },
+    profilePhoto:            { uploadFn: 'uploadProfilePhoto',           dbField: 'profilePhotoLink' },
+    relievingLetter1:        { uploadFn: 'uploadRelievingLetter1',       dbField: 'relievingLetter1Link' },
+    relievingLetter2:        { uploadFn: 'uploadRelievingLetter2',       dbField: 'relievingLetter2Link' },
+    pfPassbook:              { uploadFn: 'uploadPfPassbook',             dbField: 'pfPassbookLink' },
+    previousPayslip1:        { uploadFn: 'uploadPreviousPayslip1',      dbField: 'previousPayslip1Link' },
+    previousPayslip2:        { uploadFn: 'uploadPreviousPayslip2',      dbField: 'previousPayslip2Link' },
+    previousPayslip3:        { uploadFn: 'uploadPreviousPayslip3',      dbField: 'previousPayslip3Link' },
+    higherSchoolCertificate: { uploadFn: 'uploadHigherSchoolCertificate', dbField: 'higherSchoolCertificateLink' },
+  };
+
+  const docConfig = DOC_MAP[documentType];
+  if (!docConfig) {
+    return res.status(400).json({ success: false, message: `Invalid documentType: ${documentType}` });
+  }
+
+  try {
+    // 1. Get existing document link
+    const existingResult = await session.run(
+      `MATCH (p:PersonalDetails {userId: $userId}) RETURN p.${docConfig.dbField} AS oldLink`,
+      { userId }
+    );
+
+    if (existingResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Profile not found" });
+    }
+
+    const oldLink = existingResult.records[0].get("oldLink");
+
+    // 2. Delete old file from Google Drive if it exists
+    if (oldLink) {
+      const oldFileId = extractDriveFileId(oldLink);
+      if (oldFileId) {
+        try {
+          if (docConfig.useAadhar) {
+            await googleDrive.deleteCandidateImage(oldFileId);
+          } else {
+            await googleDrive.deleteFileFromDrive(oldFileId);
+          }
+          console.log(`[Admin Doc Update] Deleted old ${documentType} file: ${oldFileId}`);
+        } catch (delErr) {
+          console.warn(`[Admin Doc Update] Warning: Could not delete old file ${oldFileId}:`, delErr.message);
+        }
+      }
+    }
+
+    // 3. Upload new file
+    const uploadFn = googleDrive[docConfig.uploadFn];
+    if (!uploadFn) {
+      return res.status(500).json({ success: false, message: `Upload function not found: ${docConfig.uploadFn}` });
+    }
+
+    let uploadResult;
+    if (docConfig.useAadhar) {
+      uploadResult = await uploadFn(file.buffer, file.originalname, file.mimetype, userId, 'document');
+    } else {
+      uploadResult = await uploadFn(file.buffer, file.originalname, file.mimetype, userId);
+    }
+
+    if (!uploadResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: `Failed to upload ${documentType}`,
+        error: uploadResult.error
+      });
+    }
+
+    const newLink = uploadResult.viewLink;
+
+    // 4. Update the link in Neo4j
+    const updateResult = await session.run(
+      `MATCH (p:PersonalDetails {userId: $userId})
+       SET p.${docConfig.dbField} = $newLink, p.updatedAt = $updatedAt
+       RETURN p { ${RETURN_FIELDS} } as personalDetails`,
+      { userId, newLink, updatedAt: new Date().toISOString() }
+    );
+
+    const personalDetails = updateResult.records[0].get("personalDetails");
+    if (personalDetails.skills && typeof personalDetails.skills === 'string') {
+      try { personalDetails.skills = JSON.parse(personalDetails.skills); }
+      catch (e) { personalDetails.skills = []; }
+    }
+
+    console.log(`[Admin Doc Update] ✅ Updated ${documentType} for user ${userId}`);
+
+    res.json({
+      success: true,
+      message: `${documentType} updated successfully`,
+      data: personalDetails,
+      newLink
+    });
+
+  } catch (err) {
+    console.error(`[Admin Doc Update] ❌ Error updating ${documentType}:`, err);
+    res.status(500).json({ success: false, message: "Database error: " + err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+
 router.put("/:userId", async (req, res) => {
   const driver = getDriver();
 
