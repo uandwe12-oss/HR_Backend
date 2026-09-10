@@ -8,6 +8,11 @@ const path = require("path");
 const crypto = require("crypto");
 
 // ==========================================
+// Constants
+// ==========================================
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
+
+// ==========================================
 // Microsoft MSAL Configuration
 // ==========================================
 
@@ -55,8 +60,7 @@ router.get("/microsoft/callback", async (req, res) => {
   if (!code) {
     console.error("Microsoft callback did not contain an authorization code");
 
-    const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
-    return res.redirect(`${frontendUrl}/login?error=MissingAuthorizationCode`);
+    return res.redirect(`${FRONTEND_URL}/login?error=MissingAuthorizationCode`);
   }
 
   const tokenRequest = {
@@ -76,8 +80,7 @@ router.get("/microsoft/callback", async (req, res) => {
     if (!response || !response.account) {
       console.error("Microsoft account information was not returned");
 
-      const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
-      return res.redirect(`${frontendUrl}/login?error=MicrosoftAccountMissing`);
+      return res.redirect(`${FRONTEND_URL}/login?error=MicrosoftAccountMissing`);
     }
 
     const account = response.account;
@@ -92,8 +95,7 @@ router.get("/microsoft/callback", async (req, res) => {
     if (!email) {
       console.error("Microsoft email was not returned");
 
-      const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
-      return res.redirect(`${frontendUrl}/login?error=EmailMissing`);
+      return res.redirect(`${FRONTEND_URL}/login?error=EmailMissing`);
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -228,9 +230,8 @@ router.get("/microsoft/callback", async (req, res) => {
       // 7. Redirect to React SSO Callback
       // ==========================================
 
-      const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
       res.redirect(
-        `${frontendUrl}/sso-callback?token=${encodeURIComponent(token)}`
+        `${FRONTEND_URL}/sso-callback?token=${encodeURIComponent(token)}`
       );
     } finally {
       await session.close();
@@ -256,8 +257,7 @@ router.get("/microsoft/callback", async (req, res) => {
     console.error("Correlation ID:", error.correlationId);
     console.error("Full error:", error);
 
-    const frontendUrl = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
-    return res.redirect(`${frontendUrl}/login?error=SSOFailed`);
+    return res.redirect(`${FRONTEND_URL}/login?error=SSOFailed`);
   }
 });
 
