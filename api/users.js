@@ -111,8 +111,10 @@ router.post("/", async (req, res) => {
   try {
     const { username, password, role, assignedClient } = req.body; // Remove assignedCompany
 
+    let roles = Array.isArray(role) ? role : [role];
+
     // Validation
-    if (!username || !password || !role) {
+    if (!username || !password || roles.length === 0) {
       return res.status(400).json({ 
         success: false,
         message: "Username, password and role are required" 
@@ -136,8 +138,8 @@ router.post("/", async (req, res) => {
     // Hash password
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // Validate role
-    if (!VALID_ROLES.includes(role)) {
+    // Validate roles
+    if (!roles.every(r => VALID_ROLES.includes(r))) {
       return res.status(400).json({
         success: false,
         message: `Invalid role. Valid roles: ${VALID_ROLES.join(", ")}`
@@ -145,10 +147,11 @@ router.post("/", async (req, res) => {
     }
 
     // Role-specific validation
-    if ((role === "Interviewer" || role === "Client Interviewer") && !assignedClient) {
+    const needsClient = roles.some(r => ["Interviewer", "Client Interviewer", "Sales"].includes(r));
+    if (needsClient && !assignedClient) {
       return res.status(400).json({
         success: false,
-        message: `${role} role requires an assigned client. Please select a client.`
+        message: `Selected role(s) require an assigned client. Please select a client.`
       });
     }
 
@@ -156,8 +159,8 @@ router.post("/", async (req, res) => {
     const neo4jData = {
       username,
       passwordHash,
-      role,
-      assignedClient: (role === "Interviewer" || role === "Client Interviewer") ? (assignedClient || null) : null,
+      role: roles,
+      assignedClient: needsClient ? (assignedClient || null) : null,
       createdAt: new Date().toISOString()
     };
 
@@ -434,7 +437,9 @@ router.put("/:username", async (req, res) => {
     if (assignedClient) console.log(`   New assigned client: ${assignedClient}`);
     if (assignedCompany) console.log(`   New assigned company: ${assignedCompany}`);
 
-    if (!role) {
+    let roles = Array.isArray(role) ? role : [role];
+
+    if (roles.length === 0) {
       return res.status(400).json({ 
         success: false,
         message: "Role is required" 
@@ -442,18 +447,20 @@ router.put("/:username", async (req, res) => {
     }
 
     // Validate role
-    if (!VALID_ROLES.includes(role)) {
+    if (!roles.every(r => VALID_ROLES.includes(r))) {
       return res.status(400).json({
         success: false,
         message: `Invalid role. Valid roles: ${VALID_ROLES.join(", ")}`
       });
     }
 
+    const needsClient = roles.some(r => ["Interviewer", "Client Interviewer", "Sales"].includes(r));
+
     // Role-specific validation
-    if ((role === "Interviewer" || role === "Client Interviewer") && !assignedClient) {
+    if (needsClient && !assignedClient) {
       return res.status(400).json({
         success: false,
-        message: `${role} role requires an assigned client.`
+        message: `Selected role(s) require an assigned client.`
       });
     }
 
@@ -473,10 +480,10 @@ router.put("/:username", async (req, res) => {
 
     // Build dynamic update query
     let updateQuery = `MATCH (u:User {username: $username}) SET u.role = $role`;
-    const params = { username, role };
+    const params = { username, role: roles };
 
-    // Handle assignedClient for Interviewer and Client Interviewer
-    if (role === "Interviewer" || role === "Client Interviewer") {
+    // Handle assignedClient for Interviewer, Client Interviewer, and Sales
+    if (needsClient) {
       if (assignedClient) {
         updateQuery += `, u.assignedClient = $assignedClient`;
         params.assignedClient = assignedClient;
@@ -488,17 +495,10 @@ router.put("/:username", async (req, res) => {
       // Remove assignedCompany if it exists
       updateQuery += ` REMOVE u.assignedCompany`;
     } 
-   // Handle Employee role - remove both assigned fields
-else if (role === "Employee") {
-  // For Employee, remove both assignedClient and assignedCompany
-  updateQuery += ` REMOVE u.assignedClient, u.assignedCompany`;
-  // console.log(`   Removing both assigned client and assigned company for Employee`);
-}
-// For Admin and Recruiter, remove both assigned fields
-else {
-  updateQuery += ` REMOVE u.assignedClient, u.assignedCompany`;
-  // console.log(`   Removing both assigned client and assigned company`);
-}
+    // Handle roles that don't need assigned fields
+    else {
+      updateQuery += ` REMOVE u.assignedClient, u.assignedCompany`;
+    }
     
     // Execute update
     await session.run(updateQuery, params);
@@ -525,7 +525,7 @@ else {
     const updatedPid = updatedUser.get("pid");
     const updatedDate = updatedUser.get("createdAt");
 
-    console.log(`✅ User ${username} updated successfully to role: ${updatedRole}`);
+    // console.log(`✅ User ${username} updated successfully to role: ${updatedRole}`);
     if (updatedClient) console.log(`   Client: ${updatedClient}`);
     if (updatedCompany) console.log(`   Company: ${updatedCompany}`);
     if (updatedPid) console.log(`   PID: ${updatedPid}`);
