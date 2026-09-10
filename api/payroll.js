@@ -3,7 +3,7 @@ const router = express.Router();
 const getDriver = require("../lib/neo4j");
 const crypto = require("crypto");
 const multer = require("multer");
-const { uploadPayslip, uploadChinaPayslip, uploadUSAPayslip } = require("../services/googleDrive");
+const { uploadPayslip, uploadChinaPayslip, uploadUSAPayslip, deleteFileFromDrive } = require("../services/googleDrive");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -611,6 +611,50 @@ router.get("/admin/migrate", async (req, res) => {
     res.json({ success: true, message: `Successfully migrated ${updatedCount} records.` });
   } catch (error) {
     console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.close();
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    const { id } = req.params;
+    
+    // First retrieve the record to get the payslipUrl
+    const recordResult = await session.run(`
+      MATCH (p:PayrollRecord {id: $id})
+      RETURN p.payslipUrl AS payslipUrl
+    `, { id });
+    
+    let payslipUrl = null;
+    if (recordResult.records.length > 0) {
+      payslipUrl = recordResult.records[0].get('payslipUrl');
+    }
+    
+    // Delete from Neo4j
+    const result = await session.run(`
+      MATCH (p:PayrollRecord {id: $id})
+      DELETE p
+      RETURN p
+    `, { id });
+    
+    if (result.records.length > 0) {
+      // If there's a Google Drive URL, extract ID and delete from Drive
+      if (payslipUrl && typeof payslipUrl === 'string') {
+        const fileIdMatch = payslipUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (fileIdMatch && fileIdMatch[1]) {
+           await deleteFileFromDrive(fileIdMatch[1]);
+        }
+      }
+      res.json({ success: true, message: 'Payroll record and associated files deleted successfully.' });
+    } else {
+      res.status(404).json({ success: false, message: 'Payroll record not found.' });
+    }
+  } catch (error) {
+    console.error("Error deleting payroll record:", error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     await session.close();
