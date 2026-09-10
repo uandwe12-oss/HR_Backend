@@ -24,13 +24,18 @@ const EMPLOYEE_TRANSFER_FOLDER_ID = '1RQU_k8ie5yRsYFOIPX997ItIBbwAPpJ2'; // For 
 const REIMBURSEMENT_FOLDER_ID = '1RQU_k8ie5yRsYFOIPX997ItIBbwAPpJ2'; // For Reimbursement Documents
 const PAYSLIP_FOLDER_ID = '10Gp5wXt-x_wGKGiJ_8KbIRuFN9CwNfgh'; // For Employee Payslips
 const CHINA_PAYSLIP_FOLDER_ID = '1p0F19U4o5o-TFA2Y8f9rqkBS3xbSGl3y'; // For China Payslips
-const NATIONAL_ID_FOLDER_ID = '19tRkAmK8ZPgyvFla8felhozyebw48zRv'; // For China National ID
+const USA_PAYSLIP_FOLDER_ID = '1cAngTalhfR-5kaSYq__5wx00i5VG6CTG'; // For USA Payslips
+const PREVIOUS_PAYSLIPS_FOLDER_ID = '1Br2r3hs8G34789lin0Y1CP37N5b0KpNt'; // For Previous Employment Payslips
+const NATIONAL_ID_FOLDER_ID = '1uc4P0-uiS12xGILuLE575aupXkdvABNG'; // For China National ID
+const SSN_FOLDER_ID = '1HJl5gqqtNTliruZgzjhRhQ6S_3z-LPGq'; // For USA SSN Document
+const HIGHER_SCHOOL_CERTIFICATE_FOLDER_ID = '1J5UVe04XAp6wf03Q9i4jpdPZo1eBeBNv'; // For China Higher School Certificate
 
 const RELIEVING_LETTER_1_FOLDER_ID = '1uRcgItvzQKrcteSkBzBL95vXAfgevVmU'; // For Relieving Letter 1
 const RELIEVING_LETTER_2_FOLDER_ID = '1NcWNyP5Uiu3DpGKKD-L9Z-TDLyCVPpkR'; // For Relieving Letter 2
 const PF_PASSBOOK_FOLDER_ID = '1F8V1dPTag5Utrj4vUHFZj5g0_kYxJCJZ'; // For PF Passbook Screenshots
 const TIMESHEET_FOLDER_ID = '1p4yAZEn-lNy9yRpY2HVPRbKV3odr0TQb'; // For Timesheet images and documents
 const ASSET_RELEASE_FOLDER_ID = '1W3esDZCc5JVlSNpFH6g3oE8Tati5CUGI'; // For Asset Release Images
+const TRAINING_FOLDER_ID = '1x6FPrH9A0cgMdQawYN9l40DM3jK-hyWQ'; // For Training Materials
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
@@ -202,6 +207,20 @@ async function uploadCandidateProfileResume(filePath, fileName) {
  */
 async function uploadNationalIdDocument(fileBuffer, originalName, mimeType, userId) {
   return await uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'national_id', NATIONAL_ID_FOLDER_ID);
+}
+
+/**
+ * Upload SSN document to SSN specific folder
+ */
+async function uploadSsnDocument(fileBuffer, originalName, mimeType, userId) {
+  return await uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'ssn', SSN_FOLDER_ID);
+}
+
+/**
+ * Upload Higher School Certificate to specific folder
+ */
+async function uploadHigherSchoolCertificate(fileBuffer, originalName, mimeType, userId) {
+  return await uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'higher_school_certificate', HIGHER_SCHOOL_CERTIFICATE_FOLDER_ID);
 }
 
 /**
@@ -470,6 +489,22 @@ async function uploadChinaPayslip(fileBuffer, originalName, mimeType, userId) {
   return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'payslip_china', CHINA_PAYSLIP_FOLDER_ID);
 }
 
+async function uploadUSAPayslip(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'payslip_usa', USA_PAYSLIP_FOLDER_ID);
+}
+
+async function uploadPreviousPayslip1(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'previous_payslip_1', PREVIOUS_PAYSLIPS_FOLDER_ID);
+}
+
+async function uploadPreviousPayslip2(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'previous_payslip_2', PREVIOUS_PAYSLIPS_FOLDER_ID);
+}
+
+async function uploadPreviousPayslip3(fileBuffer, originalName, mimeType, userId) {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'previous_payslip_3', PREVIOUS_PAYSLIPS_FOLDER_ID);
+}
+
 async function uploadNewsImage(fileBuffer, originalName, mimeType, userId = 'news') {
   return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'news_banner', TIMESHEET_FOLDER_ID);
 }
@@ -480,6 +515,53 @@ async function uploadNewsAttachment(fileBuffer, originalName, mimeType, userId =
 
 async function uploadAssetReleaseImage(fileBuffer, originalName, mimeType, userId) {
   return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'asset_release', ASSET_RELEASE_FOLDER_ID);
+}
+
+async function uploadBufferToDrive(fileBuffer, fileName) {
+  try {
+    const drive = await getDriveService();
+    const stream = require('stream');
+    const bufferStream = new stream.PassThrough();
+    bufferStream.end(fileBuffer);
+
+    const fileMetadata = {
+      name: fileName,
+      parents: [DRIVE_FOLDER_ID]
+    };
+
+    const media = {
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      body: bufferStream
+    };
+
+    const response = await drive.files.create({
+      resource: fileMetadata,
+      media: media,
+      fields: 'id,name,webViewLink',
+      supportsAllDrives: true
+    }, {
+      timeout: 120000,
+      retryConfig: {
+        retry: 3,
+        retryDelay: 1000,
+        httpMethodsToRetry: ['POST', 'PUT']
+      }
+    });
+
+    return {
+      success: true,
+      fileId: response.data.id,
+      fileName: response.data.name,
+      viewLink: response.data.webViewLink
+    };
+  } catch (error) {
+    console.error('❌ Upload Error:', error.message);
+    return { success: false, error: error.message, code: error.code };
+  }
+}
+
+async function uploadTrainingMaterial(fileBuffer, originalName, mimeType, userId = 'admin') {
+  return uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId, 'training_material', TRAINING_FOLDER_ID);
 }
 
 // ============ EXISTING FUNCTIONS (Preserved) ============
@@ -635,6 +717,25 @@ async function firstTimeAuth() {
 }
 
 // Export all functions
+// Function to delete a file from Google Drive by its file ID
+async function deleteFileFromDrive(fileId) {
+  try {
+    const auth = await authorize();
+    if (!auth) throw new Error('Authorization failed');
+    const drive = google.drive({ version: 'v3', auth });
+    
+    await drive.files.delete({
+      fileId: fileId
+    });
+    
+    console.log(`✅ File ${fileId} deleted from Google Drive`);
+    return { success: true, message: "File deleted successfully" };
+  } catch (error) {
+    console.error('❌ Error deleting file from drive:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
 module.exports = {
   // Existing exports
   uploadToDrive,
@@ -672,8 +773,17 @@ module.exports = {
   uploadReimbursementDocument,
   uploadPayslip,
   uploadChinaPayslip,
+  uploadUSAPayslip,
+  uploadPreviousPayslip1,
+  uploadPreviousPayslip2,
+  uploadPreviousPayslip3,
   uploadNationalIdDocument,
+  uploadSsnDocument,
   uploadNewsImage,
   uploadNewsAttachment,
-  uploadAssetReleaseImage
+  uploadAssetReleaseImage,
+  uploadHigherSchoolCertificate,
+  uploadTrainingMaterial,
+  uploadBufferToDrive,
+  deleteFileFromDrive
 };
