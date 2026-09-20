@@ -7,21 +7,22 @@ const fs = require('fs');
 const { initializeAllExports } = require('./services/autoExportMaster.js');
 const EXPORT_CONFIGS = require('./services/exportConfigs.js');
 const { startAutoCancelAssetReleaseScheduler } = require('./services/autoCancelAssetRelease.js');
-const { verifyToken } = require('./middleware/auth');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-
-
 async function initializeServices() {
   console.log('\n🔧 Initializing services...');
-
+  
+  // Start the Asset Release auto canceler (this is not an export)
   startAutoCancelAssetReleaseScheduler();
-
+  
   const exporter = initializeAllExports(EXPORT_CONFIGS);
-
+  
+  // 1. Run initial export check for all modules
   await exporter.initAll();
-
+  
+  // 2. Start cron schedulers for all modules
   exporter.startAllSchedulers();
 }
 
@@ -31,10 +32,13 @@ async function initializeServices() {
 
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:5173/myuandwe",
+  "http://localhost:3000",
   "https://myuandwe.vercel.app",
-  "https://uandwe.com",
-  "https://www.uandwe.com"
+  "https://recruitment-hiring-portal-ibsf.vercel.app",
+  "https://uandwe.com"
 ];
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
@@ -83,7 +87,7 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: `https://myuandwe-a3anhhcfewcvffhk.centralindia-01.azurewebsites.net`,
+        url: `http://localhost:${PORT}`,
         description: "Local Development Server"
       }
     ],
@@ -104,14 +108,19 @@ try {
 
 
 
+// Debug endpoint
 
 
 /* ================================
    ROUTES
 ================================ */
+
+const { verifyToken } = require('./middleware/auth');
+
 // ── Public routes (no token needed) ──────────────────────────────
 app.use("/api/auth", require("./api/auth"));   // SSO Auth
 app.use("/api/login", require("./api/login")); // Normal login
+app.use("/api/cron", require("./api/cron"));   // Vercel Cron jobs
 
 // ── Protected routes (valid JWT required) ────────────────────────
 app.use("/api/demand", verifyToken, require("./api/demand"));
@@ -169,34 +178,22 @@ app.use((err, req, res, next) => {
   });
 });
 
-
-
 /* ================================
-START SERVER
+   START SERVER
 ================================ */
 
-async function startServer() {
-  try {
-    console.log('\n🔧 Initializing services...');
+app.listen(PORT, async () => {
+  console.log(`\n${'='.repeat(50)}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`${'='.repeat(50)}`);
+  console.log(`📚 Swagger UI: http://localhost:${PORT}/api-docs`);
+  console.log(`📄 Swagger JSON: http://localhost:${PORT}/swagger.json`);
+  console.log(`🔍 Debug endpoints: http://localhost:${PORT}/api/debug-endpoints`);
+  console.log(`✅ Test endpoint: http://localhost:${PORT}/api/test`);
+  console.log(`${'='.repeat(50)}\n`);
 
-    await initializeServices();
-
-    console.log('✅ All services initialized successfully!\n');
-
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`📡 Port: ${PORT}`);
-    });
-
-  } catch (error) {
-    console.error("❌ Failed to initialize services:", error);
-    process.exit(1);
-  }
-}
-
-startServer();
+  await initializeServices();
+  console.log(`✅ All services initialized successfully!\n`);
+});
 
 module.exports = app;
-
-
-
