@@ -172,7 +172,7 @@ class AutoExportService {
   }
 
   startScheduler() {
-    console.log(`[${this.moduleName}] Scheduler registered: ${this.cronSchedule}`);
+    console.log(`[${this.moduleName}] Scheduler registered: ${this.cronSchedule} (Asia/Kolkata)`);
     cron.schedule(this.cronSchedule, async () => {
       console.log(`[${this.moduleName}] Running scheduled export...`);
       try {
@@ -185,6 +185,8 @@ class AutoExportService {
       } catch (error) {
         console.error(`[${this.moduleName}] Scheduled export failed:`, error);
       }
+    }, {
+      timezone: "Asia/Kolkata"
     });
   }
 
