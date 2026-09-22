@@ -264,6 +264,7 @@ router.post("/", async (req, res) => {
       primarySkill: req.body.primarySkill || [],
       secondarySkill: req.body.secondarySkill || [],
       recruiterPOC: req.body.recruiterPOC || "",
+      sales: req.body.sales || "",
       status: req.body.status || "Active",
       statusChangedDate: "", // Initialize empty
       statusHistory: req.body.statusHistory || "" // Store reason
