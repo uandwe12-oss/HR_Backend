@@ -175,15 +175,46 @@ router.get('/my', async (req, res) => {
   }
 });
 
-// GET All Reimbursements (Admin)
-router.get('/admin', async (req, res) => {
+// GET Available Months (Admin)
+router.get('/admin/months', async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
 
   try {
     const result = await session.run(
-      `MATCH (r:Reimbursement) RETURN r ORDER BY r.createdAt DESC`
+      `MATCH (r:Reimbursement)
+       WITH substring(r.createdAt, 0, 7) AS month
+       RETURN DISTINCT month ORDER BY month DESC`
     );
+
+    const months = result.records.map(record => record.get('month'));
+    res.json({ success: true, data: months });
+  } catch (error) {
+    console.error('Error fetching available months:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  } finally {
+    await session.close();
+  }
+});
+
+// GET All Reimbursements (Admin)
+router.get('/admin', async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { month } = req.query; // format YYYY-MM
+
+  try {
+    let query = `MATCH (r:Reimbursement)`;
+    let params = {};
+
+    if (month && month !== 'All') {
+      query += ` WHERE r.createdAt STARTS WITH $month`;
+      params.month = month;
+    }
+
+    query += ` RETURN r ORDER BY r.createdAt DESC`;
+
+    const result = await session.run(query, params);
 
     const reimbursements = result.records.map(record => record.get('r').properties);
     res.json({ success: true, data: reimbursements });
