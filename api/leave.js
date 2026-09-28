@@ -1004,7 +1004,7 @@ router.put("/adjust/:id", async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
   const { id } = req.params;
-  const { actualUsedDays, adjustmentReason, adjustedBy } = req.body;
+  const { actualUsedDays, adjustmentReason, adjustedBy, adjustedEndDate } = req.body;
 
   try {
     const parsedActualDays = parseFloat(actualUsedDays);
@@ -1075,6 +1075,7 @@ router.put("/adjust/:id", async (req, res) => {
           l.adjustedBy = $adjustedBy,
           l.adjustedAt = $adjustedAt,
           l.adjustmentReason = $adjustmentReason,
+          l.adjustedEndDate = $adjustedEndDate,
           l.lopDays = $newLopDays,
           l.annualLeaveDays = $newAnnualLeaveDays,
           l.salaryDeductionPercentage = $newSalaryDeductionPercentage,
@@ -1088,6 +1089,7 @@ router.put("/adjust/:id", async (req, res) => {
       adjustedBy: adjustedBy || 'Admin',
       adjustedAt: new Date().toISOString(),
       adjustmentReason,
+      adjustedEndDate: adjustedEndDate || null,
       newLopDays,
       newAnnualLeaveDays,
       newSalaryDeductionPercentage,
@@ -1119,6 +1121,116 @@ router.put("/adjust/:id", async (req, res) => {
   } catch (error) {
     console.error("Error adjusting leave:", error);
     res.status(500).json({ success: false, message: "Failed to adjust leave" });
+  } finally {
+    await session.close();
+  }
+});
+
+// 7. Cancel Leave Request (Employee Self-Service for Pending leaves)
+router.delete("/cancel/:id", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { id } = req.params;
+  const { userId } = req.body;
+
+  try {
+    // Verify leave belongs to user and is still Pending
+    const getResult = await session.run(`
+      MATCH (l:LeaveRequest {id: $id})
+      RETURN l
+    `, { id });
+
+    if (getResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Leave request not found" });
+    }
+
+    const leave = getResult.records[0].get('l').properties;
+
+    if (userId && leave.userId !== userId) {
+      return res.status(403).json({ success: false, message: "Not authorized to cancel this leave" });
+    }
+
+    if (leave.status !== 'Pending') {
+      return res.status(400).json({ success: false, message: "Only Pending leave requests can be cancelled" });
+    }
+
+    await session.run(`
+      MATCH (l:LeaveRequest {id: $id})
+      DETACH DELETE l
+    `, { id });
+
+    res.json({ success: true, message: "Leave request cancelled successfully" });
+  } catch (error) {
+    console.error("Error cancelling leave:", error);
+    res.status(500).json({ success: false, message: "Failed to cancel leave request" });
+  } finally {
+    await session.close();
+  }
+});
+
+// 8. Admin Cancel Leave (works on any status including Approved)
+router.delete("/admin/cancel/:id", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { id } = req.params;
+  const { cancelReason, cancelledBy } = req.body;
+
+  try {
+    if (!cancelReason || !cancelReason.trim()) {
+      return res.status(400).json({ success: false, message: "Cancellation reason is required" });
+    }
+
+    // Get the leave request
+    const getResult = await session.run(`
+      MATCH (l:LeaveRequest {id: $id})
+      RETURN l
+    `, { id });
+
+    if (getResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Leave request not found" });
+    }
+
+    const leave = getResult.records[0].get('l').properties;
+
+    // Notify the employee about the cancellation
+    const notificationMsg = `Your ${leave.leaveType} from ${leave.startDate} to ${leave.endDate} has been cancelled by admin. Reason: ${cancelReason}`;
+    const createdAt = new Date().toISOString();
+
+    await session.run(`
+      CREATE (n:Notification {
+        id: randomUUID(),
+        userId: $userId,
+        message: $message,
+        type: 'LEAVE_CANCELLED',
+        relatedId: $leaveId,
+        isRead: false,
+        createdAt: $createdAt
+      })
+    `, { userId: leave.userId, message: notificationMsg, leaveId: id, createdAt });
+
+    // Delete the leave record (this restores the balance automatically since balance is computed from remaining records)
+    await session.run(`
+      MATCH (l:LeaveRequest {id: $id})
+      DETACH DELETE l
+    `, { id });
+
+    // If there's a payroll record for this month, flag it for recalculation
+    if (leave.startDate) {
+      const leaveStartDate = new Date(leave.startDate);
+      const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+      const leaveMonth = monthNames[leaveStartDate.getMonth()];
+      const leaveYear = leaveStartDate.getFullYear().toString();
+      await session.run(`
+        MATCH (p:PayrollRecord {employeeNumber: $employeeNumber, month: $month, year: $year})
+        SET p.needsRecalculation = true,
+            p.recalculationReason = 'Leave cancelled by admin. Balance restored.'
+      `, { employeeNumber: leave.employeeNumber, month: leaveMonth, year: leaveYear });
+    }
+
+    res.json({ success: true, message: "Leave cancelled successfully. Employee has been notified." });
+  } catch (error) {
+    console.error("Error cancelling leave (admin):", error);
+    res.status(500).json({ success: false, message: "Failed to cancel leave" });
   } finally {
     await session.close();
   }
