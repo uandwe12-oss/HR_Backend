@@ -1192,9 +1192,27 @@ router.delete("/admin/cancel/:id", async (req, res) => {
 
     const leave = getResult.records[0].get('l').properties;
 
+    const cancelledAt = new Date().toISOString();
+
+    // Update leave status to Cancelled (keep the record for history)
+    await session.run(`
+      MATCH (l:LeaveRequest {id: $id})
+      SET l.status = 'Cancelled',
+          l.supervisorStatus = 'Cancelled',
+          l.hrStatus = 'Cancelled',
+          l.cancelReason = $cancelReason,
+          l.cancelledBy = $cancelledBy,
+          l.cancelledAt = $cancelledAt,
+          l.actualUsedDays = 0,
+          l.annualLeaveDays = 0,
+          l.lopDays = 0,
+          l.isLOP = false,
+          l.salaryImpact = false
+      RETURN l
+    `, { id, cancelReason, cancelledBy: cancelledBy || 'Admin', cancelledAt });
+
     // Notify the employee about the cancellation
     const notificationMsg = `Your ${leave.leaveType} from ${leave.startDate} to ${leave.endDate} has been cancelled by admin. Reason: ${cancelReason}`;
-    const createdAt = new Date().toISOString();
 
     await session.run(`
       CREATE (n:Notification {
@@ -1204,15 +1222,9 @@ router.delete("/admin/cancel/:id", async (req, res) => {
         type: 'LEAVE_CANCELLED',
         relatedId: $leaveId,
         isRead: false,
-        createdAt: $createdAt
+        createdAt: $cancelledAt
       })
-    `, { userId: leave.userId, message: notificationMsg, leaveId: id, createdAt });
-
-    // Delete the leave record (this restores the balance automatically since balance is computed from remaining records)
-    await session.run(`
-      MATCH (l:LeaveRequest {id: $id})
-      DETACH DELETE l
-    `, { id });
+    `, { userId: leave.userId, message: notificationMsg, leaveId: id, cancelledAt });
 
     // If there's a payroll record for this month, flag it for recalculation
     if (leave.startDate) {
