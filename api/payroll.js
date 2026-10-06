@@ -11,10 +11,10 @@ const upload = multer({ storage: multer.memoryStorage() });
 router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
-    const { 
-      employeeNumber, employeeName, month, year, baseSalary, 
+    const {
+      employeeNumber, employeeName, month, year, baseSalary,
       houseRentAllowance = 0,
       leaveTravelAllowance = 0,
       fourWheelerMaintenance = 0,
@@ -74,23 +74,23 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       let uploadResult;
       if (country === 'China') {
         uploadResult = await uploadChinaPayslip(
-          req.file.buffer, 
-          req.file.originalname, 
-          req.file.mimetype, 
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype,
           `${employeeNumber}_${month}_${year}`
         );
       } else if (country === 'USA' || country === 'United States') {
         uploadResult = await uploadUSAPayslip(
-          req.file.buffer, 
-          req.file.originalname, 
-          req.file.mimetype, 
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype,
           `${employeeNumber}_${month}_${year}`
         );
       } else {
         uploadResult = await uploadPayslip(
-          req.file.buffer, 
-          req.file.originalname, 
-          req.file.mimetype, 
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype,
           `${employeeNumber}_${month}_${year}`
         );
       }
@@ -190,12 +190,12 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
     const parsedYear = parseInt(year);
     const parsedMonthIndex = monthNames.indexOf(month) + 1; // 1-12
     const totalDaysInMonth = new Date(parsedYear, parsedMonthIndex, 0).getDate();
-    
+
     // Calculate new Daily Salary based LOP
     const dailySalary = parsedBaseSalary / totalDaysInMonth;
     const workedDays = totalDaysInMonth - totalLopDays;
     const calculatedLopAmount = dailySalary * totalLopDays;
-    
+
     // finalSalaryCalculated handles base, allowances, custom additions, LOP, reimbursements, and all deductions.
     const finalSalaryCalculated = parsedBaseSalary + parsedAllowances + dynamicOtherAdditionsAmount - parsedOtherDeductions - calculatedLopAmount + totalReimbursements;
     const finalReason = deductionReasons.join(', ');
@@ -272,9 +272,9 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
             p.needsRecalculation = false,
             p.recalculationReason = null
         RETURN p
-      `, { 
-        employeeNumber, month, year, employeeName: employeeName || '', 
-        baseSalary: parsedBaseSalary, 
+      `, {
+        employeeNumber, month, year, employeeName: employeeName || '',
+        baseSalary: parsedBaseSalary,
         houseRentAllowance: pHouseRentAllowance,
         leaveTravelAllowance: pLeaveTravelAllowance,
         fourWheelerMaintenance: pFourWheelerMaintenance,
@@ -298,7 +298,7 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         totalDaysInMonth,
         dailySalary,
         workedDays,
-        allowances: parsedAllowances, 
+        allowances: parsedAllowances,
         reimbursementsAmount: totalReimbursements,
         otherDeductions: parsedOtherDeductions,
         annualLeaveUsed: totalAnnualLeave,
@@ -413,9 +413,9 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
           needsRecalculation: false
         })
         RETURN p
-      `, { 
-        id, employeeNumber, employeeName: employeeName || '', month, year, 
-        baseSalary: parsedBaseSalary, 
+      `, {
+        id, employeeNumber, employeeName: employeeName || '', month, year,
+        baseSalary: parsedBaseSalary,
         houseRentAllowance: pHouseRentAllowance,
         leaveTravelAllowance: pLeaveTravelAllowance,
         fourWheelerMaintenance: pFourWheelerMaintenance,
@@ -439,7 +439,7 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         totalDaysInMonth,
         dailySalary,
         workedDays,
-        allowances: parsedAllowances, 
+        allowances: parsedAllowances,
         reimbursementsAmount: totalReimbursements,
         otherDeductions: parsedOtherDeductions,
         annualLeaveUsed: totalAnnualLeave,
@@ -447,7 +447,7 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         lopDeductionPercentage: 0, // Ignored logic
         lopDeductionAmount: calculatedLopAmount,
         deductionReason: finalReason,
-        finalSalary: finalSalaryCalculated, 
+        finalSalary: finalSalaryCalculated,
         grossSalaryTotal: parseFloat(grossSalaryTotal) || 0,
         socialInsEmployee: parseFloat(socialInsEmployee) || 0,
         housingFundEmployee: parseFloat(housingFundEmployee) || 0,
@@ -475,12 +475,12 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
         netPay: parseFloat(netPay) || 0,
         checkAmount: parseFloat(checkAmount) || 0,
         country: country || 'India',
-        payslipUrl: payslipUrl || '', createdAt: now 
+        payslipUrl: payslipUrl || '', createdAt: now
       });
     }
-      
-      // Send notification to employee
-      await session.run(`
+
+    // Send notification to employee
+    await session.run(`
         MATCH (pd:PersonalDetails {employeeNumber: $employeeNumber})
         CREATE (n:Notification {
           id: randomUUID(),
@@ -510,7 +510,7 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
 router.get("/admin/all", async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const { month, year } = req.query;
     let query = `MATCH (p:PayrollRecord) RETURN p ORDER BY p.createdAt DESC`;
@@ -531,7 +531,7 @@ router.get("/admin/all", async (req, res) => {
 
     const result = await session.run(query, params);
     const records = result.records.map(record => record.get('p').properties);
-    
+
     res.json({ success: true, data: records });
   } catch (error) {
     console.error("Error fetching all payroll records:", error);
@@ -578,24 +578,24 @@ router.get("/admin/migrate", async (req, res) => {
     const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const result = await session.run(`MATCH (p:PayrollRecord) RETURN p`);
     const records = result.records.map(record => record.get('p').properties);
-    
+
     let updatedCount = 0;
     for (const record of records) {
       const year = parseInt(record.year);
       const monthIndex = monthNames.indexOf(record.month) + 1;
       const totalDaysInMonth = new Date(year, monthIndex, 0).getDate();
-      
+
       const baseSalary = record.baseSalary || 0;
       const lopDays = record.lopDays || 0;
       const allowances = record.allowances || 0;
       const reimbursements = record.reimbursementsAmount || 0;
       const otherDeductions = record.otherDeductions || 0;
-      
+
       const dailySalary = baseSalary / totalDaysInMonth;
       const workedDays = totalDaysInMonth - lopDays;
       const newLopDeduction = dailySalary * lopDays;
       const newFinalSalary = baseSalary + allowances + reimbursements - otherDeductions - newLopDeduction;
-      
+
       await session.run(`
         MATCH (p:PayrollRecord {id: $id})
         SET p.totalDaysInMonth = $totalDaysInMonth,
@@ -622,31 +622,31 @@ router.delete('/:id', async (req, res) => {
   const session = driver.session();
   try {
     const { id } = req.params;
-    
+
     // First retrieve the record to get the payslipUrl
     const recordResult = await session.run(`
       MATCH (p:PayrollRecord {id: $id})
       RETURN p.payslipUrl AS payslipUrl
     `, { id });
-    
+
     let payslipUrl = null;
     if (recordResult.records.length > 0) {
       payslipUrl = recordResult.records[0].get('payslipUrl');
     }
-    
+
     // Delete from Neo4j
     const result = await session.run(`
       MATCH (p:PayrollRecord {id: $id})
       DELETE p
       RETURN p
     `, { id });
-    
+
     if (result.records.length > 0) {
       // If there's a Google Drive URL, extract ID and delete from Drive
       if (payslipUrl && typeof payslipUrl === 'string') {
         const fileIdMatch = payslipUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
         if (fileIdMatch && fileIdMatch[1]) {
-           await deleteFileFromDrive(fileIdMatch[1]);
+          await deleteFileFromDrive(fileIdMatch[1]);
         }
       }
       res.json({ success: true, message: 'Payroll record and associated files deleted successfully.' });
@@ -658,6 +658,46 @@ router.delete('/:id', async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   } finally {
     await session.close();
+  }
+});
+
+// 4. Download Payslip via backend proxy (avoids Google Drive redirect/navigation)
+router.get("/download/:fileId", async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const { authorize } = require("../services/googleDrive");
+    const { google } = require("googleapis");
+
+    const auth = await authorize();
+    if (!auth) {
+      return res.status(500).json({ success: false, message: "Google Drive auth failed" });
+    }
+
+    const drive = google.drive({ version: "v3", auth });
+
+    // Get file metadata first (name and mimeType)
+    const fileMeta = await drive.files.get({
+      fileId,
+      fields: "name,mimeType",
+      supportsAllDrives: true,
+    });
+
+    const fileName = fileMeta.data.name || "payslip";
+    const mimeType = fileMeta.data.mimeType || "application/octet-stream";
+
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Type", mimeType);
+
+    // Stream file content directly to the response
+    const fileStream = await drive.files.get(
+      { fileId, alt: "media", supportsAllDrives: true },
+      { responseType: "stream" }
+    );
+
+    fileStream.data.pipe(res);
+  } catch (error) {
+    console.error("Error downloading payslip:", error.message);
+    res.status(500).json({ success: false, message: "Failed to download payslip" });
   }
 });
 
