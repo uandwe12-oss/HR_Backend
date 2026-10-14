@@ -198,7 +198,7 @@ const upload = multer({
 const healthCardUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 1 * 1024 * 1024, // 1MB limit for health cards
+    fileSize: 10 * 1024 * 1024, // 10MB limit for health cards
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
@@ -270,6 +270,7 @@ const RETURN_FIELDS = `
   .profileRejectionReason,
   .healthCardLink,
   .healthCardUploadedAt,
+  .healthCards,
   .experienceType,
   .yearsOfExperience,
   .relievingLetterLink,
@@ -287,6 +288,33 @@ const RETURN_FIELDS = `
   .previousPayslip3Link
 `;
 
+function normalizePersonalDetails(details) {
+  if (!details) return details;
+  if (details.skills && typeof details.skills === 'string') {
+    try {
+      details.skills = JSON.parse(details.skills);
+    } catch (e) {
+      details.skills = [];
+    }
+  }
+  if (details.healthCards && typeof details.healthCards === 'string') {
+    try {
+      details.healthCards = JSON.parse(details.healthCards);
+    } catch (e) {
+      details.healthCards = [];
+    }
+  } else if (!details.healthCards && details.healthCardLink) {
+    details.healthCards = [{
+      id: 'legacy_1',
+      name: 'Health Card',
+      link: details.healthCardLink,
+      uploadedAt: details.healthCardUploadedAt || details.updatedAt || null
+    }];
+  } else if (!Array.isArray(details.healthCards)) {
+    details.healthCards = [];
+  }
+  return details;
+}
 
 router.get("/", async (req, res) => {
   const driver = getDriver();
@@ -316,15 +344,7 @@ router.get("/", async (req, res) => {
       }
 
       const personalDetails = result.records[0].get("personalDetails");
-
-      // Parse skills if it's a string
-      if (personalDetails.skills && typeof personalDetails.skills === 'string') {
-        try {
-          personalDetails.skills = JSON.parse(personalDetails.skills);
-        } catch (e) {
-          personalDetails.skills = [];
-        }
-      }
+      normalizePersonalDetails(personalDetails);
 
       return res.json({
         success: true,
@@ -349,13 +369,7 @@ router.get("/", async (req, res) => {
       }
 
       const personalDetails = result.records[0].get("personalDetails");
-      if (personalDetails.skills && typeof personalDetails.skills === 'string') {
-        try {
-          personalDetails.skills = JSON.parse(personalDetails.skills);
-        } catch (e) {
-          personalDetails.skills = [];
-        }
-      }
+      normalizePersonalDetails(personalDetails);
 
       return res.json({ success: true, data: personalDetails });
     }
@@ -376,13 +390,7 @@ router.get("/", async (req, res) => {
       }
 
       const personalDetails = result.records[0].get("personalDetails");
-      if (personalDetails.skills && typeof personalDetails.skills === 'string') {
-        try {
-          personalDetails.skills = JSON.parse(personalDetails.skills);
-        } catch (e) {
-          personalDetails.skills = [];
-        }
-      }
+      normalizePersonalDetails(personalDetails);
 
       return res.json({ success: true, data: personalDetails });
     }
@@ -406,16 +414,8 @@ router.get("/", async (req, res) => {
 
     const personalDetails = result.records.map(r => {
       const details = r.get("personalDetails");
-      if (details.skills && typeof details.skills === 'string') {
-        try {
-          details.skills = JSON.parse(details.skills);
-        } catch (e) {
-          details.skills = [];
-        }
-      }
-      return details;
+      return normalizePersonalDetails(details);
     });
-
 
     res.json({ success: true, count: personalDetails.length, data: personalDetails });
 
@@ -427,9 +427,53 @@ router.get("/", async (req, res) => {
   }
 });
 
+router.post("/draft", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) return res.status(500).json({ success: false, message: "No db connection" });
+  const session = driver.session();
+  try {
+    const { userId, draftData } = req.body;
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "userId is required" });
+    }
+    const draftString = JSON.stringify(draftData);
+    await session.run(`
+      MERGE (d:PersonalDetailsDraft {userId: $userId})
+      SET d.draftData = $draftString, d.updatedAt = datetime()
+    `, { userId, draftString });
+    res.json({ success: true, message: "Draft saved successfully" });
+  } catch (error) {
+    console.error("Error saving draft:", error);
+    res.status(500).json({ success: false, message: "Failed to save draft" });
+  } finally {
+    await session.close();
+  }
+});
 
-
-
+router.get("/draft/:userId", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) return res.status(500).json({ success: false, message: "No db connection" });
+  const session = driver.session();
+  try {
+    const { userId } = req.params;
+    const result = await session.run(`
+      MATCH (d:PersonalDetailsDraft {userId: $userId})
+      RETURN d.draftData AS draftData
+    `, { userId });
+    
+    if (result.records.length > 0) {
+      const draftDataStr = result.records[0].get("draftData");
+      res.json({ success: true, draftData: JSON.parse(draftDataStr) });
+    } else {
+      res.json({ success: true, draftData: null });
+    }
+  } catch (error) {
+    console.error("Error fetching draft:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch draft" });
+  } finally {
+    await session.close();
+  }
+});
 
 router.post("/", (req, res, next) => {
   const uploadMiddleware = upload.fields([
@@ -1997,7 +2041,7 @@ router.delete("/:pid", async (req, res) => {
   }
 });
 
-router.post("/upload-health-card/:employeeNumber", healthCardUpload.single('healthCard'), async (req, res) => {
+router.post("/upload-health-card/:employeeNumber", healthCardUpload.any(), async (req, res) => {
   const driver = getDriver();
   if (!driver) {
     return res.status(500).json({ success: false, message: "Database connection not available" });
@@ -2005,17 +2049,18 @@ router.post("/upload-health-card/:employeeNumber", healthCardUpload.single('heal
 
   const session = driver.session();
   const { employeeNumber } = req.params;
-  const file = req.file;
+  const files = req.files && req.files.length > 0 ? req.files : (req.file ? [req.file] : []);
 
-  if (!file) {
-    return res.status(400).json({ success: false, message: "No file uploaded" });
+  if (files.length === 0) {
+    return res.status(400).json({ success: false, message: "No file(s) uploaded" });
   }
 
   try {
-    // 1. Check if profile exists and get existing health card
+    // 1. Check if profile exists and retrieve existing healthCards
     const checkResult = await session.run(
-      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber})
-       RETURN p.healthCardLink as link`,
+      `MATCH (p:PersonalDetails)
+       WHERE p.employeeNumber = $employeeNumber OR p.userId = $employeeNumber
+       RETURN p.healthCards as healthCards, p.healthCardLink as oldLink, p.healthCardUploadedAt as oldUploadedAt`,
       { employeeNumber }
     );
 
@@ -2023,47 +2068,167 @@ router.post("/upload-health-card/:employeeNumber", healthCardUpload.single('heal
       return res.status(404).json({ success: false, message: "Employee not found" });
     }
 
-    const oldLink = checkResult.records[0].get("link");
-    let oldFileId = null;
-    if (oldLink && oldLink.includes('/d/')) {
-      oldFileId = oldLink.split('/d/')[1].split('/')[0];
+    const rawHealthCards = checkResult.records[0].get("healthCards");
+    const oldLink = checkResult.records[0].get("oldLink");
+    const oldUploadedAt = checkResult.records[0].get("oldUploadedAt");
+
+    let existingCards = [];
+    if (rawHealthCards && typeof rawHealthCards === 'string') {
+      try {
+        existingCards = JSON.parse(rawHealthCards);
+      } catch (e) {
+        existingCards = [];
+      }
+    } else if (Array.isArray(rawHealthCards)) {
+      existingCards = rawHealthCards;
+    } else if (oldLink) {
+      existingCards = [{
+        id: 'legacy_1',
+        name: 'Health Card',
+        link: oldLink,
+        uploadedAt: oldUploadedAt || null
+      }];
     }
 
-    // 2. Delete old file from Drive if it exists
-    if (oldFileId) {
-      await googleDrive.deleteFileFromDrive(oldFileId);
+    // 2. Upload all incoming files to Google Drive
+    const newCards = [];
+    for (const file of files) {
+      const uploadResult = await googleDrive.uploadHealthCard(
+        file.buffer, file.originalname, file.mimetype, employeeNumber
+      );
+
+      if (!uploadResult.success) {
+        console.error(`❌ Failed to upload ${file.originalname}:`, uploadResult.error);
+        continue;
+      }
+
+      newCards.push({
+        id: `hc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        name: file.originalname,
+        link: uploadResult.viewLink,
+        directLink: uploadResult.directLink,
+        downloadLink: uploadResult.downloadLink,
+        fileId: uploadResult.fileId,
+        uploadedAt: new Date().toISOString()
+      });
     }
 
-    // 3. Upload new file to Drive
-    const uploadResult = await googleDrive.uploadHealthCard(
-      file.buffer, file.originalname, file.mimetype, employeeNumber
-    );
-
-    if (!uploadResult.success) {
-      return res.status(500).json({ success: false, message: "Failed to upload to Google Drive", error: uploadResult.error });
+    if (newCards.length === 0) {
+      return res.status(500).json({ success: false, message: "Failed to upload file(s) to Google Drive" });
     }
 
-    const newFileId = uploadResult.fileId;
-    const viewLink = uploadResult.viewLink;
-    const fileName = file.originalname;
+    // 3. Append new cards to existing cards
+    const updatedCards = [...existingCards, ...newCards];
+    const primaryLink = updatedCards.length > 0 ? updatedCards[0].link : null;
 
     // 4. Update Neo4j
-    const updateResult = await session.run(
-      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber})
-       SET p.healthCardLink = $link,
-           p.healthCardUploadedAt = datetime()
-       RETURN p { .healthCardLink, .healthCardUploadedAt } as updatedCard`,
-      { employeeNumber, link: viewLink }
+    await session.run(
+      `MATCH (p:PersonalDetails)
+       WHERE p.employeeNumber = $employeeNumber OR p.userId = $employeeNumber
+       SET p.healthCards = $healthCardsJson,
+           p.healthCardLink = $primaryLink,
+           p.healthCardUploadedAt = datetime(),
+           p.updatedAt = datetime()
+       RETURN p { .healthCardLink, .healthCardUploadedAt, .healthCards } as updatedCard`,
+      { employeeNumber, healthCardsJson: JSON.stringify(updatedCards), primaryLink }
     );
 
     res.json({
       success: true,
-      message: "Health Card uploaded successfully",
-      data: updateResult.records[0].get("updatedCard")
+      message: `${newCards.length} health card file(s) uploaded successfully`,
+      data: {
+        healthCardLink: primaryLink,
+        healthCardUploadedAt: new Date().toISOString(),
+        healthCards: updatedCards
+      }
     });
 
   } catch (err) {
     console.error("❌ Error in upload-health-card:", err);
+    res.status(500).json({ success: false, message: "Server error: " + err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+router.delete("/health-card/:employeeNumber/:cardId", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  const session = driver.session();
+  const { employeeNumber, cardId } = req.params;
+
+  try {
+    const checkResult = await session.run(
+      `MATCH (p:PersonalDetails)
+       WHERE p.employeeNumber = $employeeNumber OR p.userId = $employeeNumber
+       RETURN p.healthCards as healthCards, p.healthCardLink as oldLink`,
+      { employeeNumber }
+    );
+
+    if (checkResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Employee not found" });
+    }
+
+    const rawHealthCards = checkResult.records[0].get("healthCards");
+    const oldLink = checkResult.records[0].get("oldLink");
+
+    let existingCards = [];
+    if (rawHealthCards && typeof rawHealthCards === 'string') {
+      try {
+        existingCards = JSON.parse(rawHealthCards);
+      } catch (e) {
+        existingCards = [];
+      }
+    } else if (Array.isArray(rawHealthCards)) {
+      existingCards = rawHealthCards;
+    } else if (oldLink) {
+      existingCards = [{ id: 'legacy_1', name: 'Health Card', link: oldLink }];
+    }
+
+    const targetCard = existingCards.find(c => c.id === cardId || c.fileId === cardId);
+    if (targetCard) {
+      let fileIdToDelete = targetCard.fileId;
+      if (!fileIdToDelete && targetCard.link && targetCard.link.includes('/d/')) {
+        fileIdToDelete = targetCard.link.split('/d/')[1].split('/')[0];
+      }
+      if (fileIdToDelete) {
+        try {
+          await googleDrive.deleteFileFromDrive(fileIdToDelete);
+        } catch (delErr) {
+          console.warn("Could not delete file from drive:", delErr.message);
+        }
+      }
+    }
+
+    const updatedCards = existingCards.filter(c => c.id !== cardId && c.fileId !== cardId);
+    const primaryLink = updatedCards.length > 0 ? updatedCards[0].link : null;
+
+    await session.run(
+      `MATCH (p:PersonalDetails)
+       WHERE p.employeeNumber = $employeeNumber OR p.userId = $employeeNumber
+       SET p.healthCards = $healthCardsJson,
+           p.healthCardLink = $primaryLink,
+           p.updatedAt = datetime()`,
+      {
+        employeeNumber,
+        healthCardsJson: JSON.stringify(updatedCards),
+        primaryLink: primaryLink
+      }
+    );
+
+    res.json({
+      success: true,
+      message: "Health card deleted successfully",
+      data: {
+        healthCards: updatedCards,
+        healthCardLink: primaryLink
+      }
+    });
+  } catch (err) {
+    console.error("❌ Error deleting health card:", err);
     res.status(500).json({ success: false, message: "Server error: " + err.message });
   } finally {
     await session.close();
@@ -2081,8 +2246,9 @@ router.get("/health-card/:employeeNumber", async (req, res) => {
 
   try {
     const result = await session.run(
-      `MATCH (p:PersonalDetails {employeeNumber: $employeeNumber})
-       RETURN p.healthCardLink as link, p.healthCardUploadedAt as uploadedAt`,
+      `MATCH (p:PersonalDetails)
+       WHERE p.employeeNumber = $employeeNumber OR p.userId = $employeeNumber
+       RETURN p.healthCards as healthCards, p.healthCardLink as link, p.healthCardUploadedAt as uploadedAt`,
       { employeeNumber }
     );
 
@@ -2090,18 +2256,38 @@ router.get("/health-card/:employeeNumber", async (req, res) => {
       return res.status(404).json({ success: false, message: "Employee not found" });
     }
 
+    const rawHealthCards = result.records[0].get("healthCards");
     const link = result.records[0].get("link");
     const uploadedAt = result.records[0].get("uploadedAt");
 
-    if (!link) {
-      return res.json({ success: true, exists: false });
+    let cards = [];
+    if (rawHealthCards && typeof rawHealthCards === 'string') {
+      try {
+        cards = JSON.parse(rawHealthCards);
+      } catch (e) {
+        cards = [];
+      }
+    } else if (Array.isArray(rawHealthCards)) {
+      cards = rawHealthCards;
+    } else if (link) {
+      cards = [{
+        id: 'legacy_1',
+        name: 'Health Card',
+        link: link,
+        uploadedAt: uploadedAt || null
+      }];
+    }
+
+    if (cards.length === 0 && !link) {
+      return res.json({ success: true, exists: false, healthCards: [] });
     }
 
     res.json({
       success: true,
       exists: true,
-      healthCardLink: link,
-      healthCardUploadedAt: uploadedAt
+      healthCardLink: link || (cards[0] && cards[0].link),
+      healthCardUploadedAt: uploadedAt || (cards[0] && cards[0].uploadedAt),
+      healthCards: cards
     });
 
   } catch (err) {
