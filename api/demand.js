@@ -52,20 +52,35 @@ router.get("/clients/list", async (req, res) => {
   const session = driver.session();
  
   try {
-    // console.log("🔍 Executing Neo4j query for unique client names...");
     const result = await session.run(
       `MATCH (d:Demand)
-       WHERE d.clientName IS NOT NULL AND d.clientName <> ''
-       RETURN DISTINCT d.clientName as clientName
-       ORDER BY d.clientName`
+       WHERE d.clientName IS NOT NULL AND trim(d.clientName) <> ''
+       RETURN DISTINCT d.clientName as clientName`
     );
  
-   
-    const clients = result.records.map(record => ({
-      name: record.get("clientName")
-    }));
+    const clientMap = new Map();
+    result.records.forEach(record => {
+      const raw = record.get("clientName");
+      if (!raw || typeof raw !== 'string') return;
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      
+      const key = trimmed.toLowerCase();
+      if (!clientMap.has(key)) {
+        clientMap.set(key, trimmed);
+      } else {
+        const existing = clientMap.get(key);
+        // Prefer TitleCase/PascalCase over all-lowercase (e.g. "Broadcom" over "broadcom")
+        if (existing === existing.toLowerCase() && trimmed !== trimmed.toLowerCase()) {
+          clientMap.set(key, trimmed);
+        }
+      }
+    });
+
+    const clients = Array.from(clientMap.values())
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+      .map(name => ({ name }));
  
-  
     res.json({
       success: true,
       clients: clients
@@ -99,9 +114,11 @@ router.get("/", async (req, res) => {
       "MATCH (d:Demand) RETURN d ORDER BY d.createdDate DESC"
     );
 
-    
     const demands = result.records.map(r => {
-      const d = r.get("d").properties;
+      const d = { ...r.get("d").properties };
+      if (d.clientName && typeof d.clientName === 'string') {
+        d.clientName = d.clientName.trim();
+      }
       return d;
     });
 
@@ -112,6 +129,218 @@ router.get("/", async (req, res) => {
       message: "Failed to fetch demands",
       error: err.message 
     });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * =================================================
+ * GET – Fetch unique historical field values for demand form dropdowns
+ * =================================================
+ */
+router.get("/field-options", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    const result = await session.run(`
+      MATCH (d:Demand)
+      RETURN 
+        collect(DISTINCT trim(d.clientName)) as clients,
+        collect(DISTINCT trim(d.country)) as countries,
+        collect(DISTINCT trim(d.location)) as locations,
+        collect(DISTINCT trim(d.interviewer1)) as uandweInterviewers,
+        collect(DISTINCT trim(d.interviewer2)) as clientInterviewers,
+        collect(DISTINCT trim(d.recruiterPOC)) as recruiters,
+        collect(DISTINCT trim(d.sales)) as sales,
+        collect(d.primarySkill) as primarySkillsRaw,
+        collect(d.secondarySkill) as secondarySkillsRaw
+    `);
+
+    const clean = (arr) => {
+      if (!Array.isArray(arr)) return [];
+      const map = new Map();
+      arr.forEach(item => {
+        if (item && typeof item === 'string') {
+          const t = item.trim();
+          if (t) {
+            const key = t.toLowerCase();
+            if (!map.has(key)) {
+              map.set(key, t);
+            } else {
+              const existing = map.get(key);
+              if (existing === existing.toLowerCase() && t !== t.toLowerCase()) {
+                map.set(key, t);
+              }
+            }
+          }
+        }
+      });
+      return Array.from(map.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    };
+
+    const cleanSkillList = (nestedList) => {
+      if (!Array.isArray(nestedList)) return [];
+      const set = new Set();
+      nestedList.forEach(item => {
+        if (Array.isArray(item)) {
+          item.forEach(sub => {
+            if (sub && typeof sub === 'string') {
+              const t = sub.trim();
+              if (t) set.add(t);
+            }
+          });
+        } else if (item && typeof item === 'string') {
+          const t = item.trim();
+          if (t) set.add(t);
+        }
+      });
+      return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    };
+
+    // Fetch hidden clients so admin-hidden client entries are excluded from dropdowns
+    const hiddenResult = await session.run(`
+      MATCH (h:HiddenDemandOption { field: 'clientName' })
+      RETURN h.value AS value
+    `);
+
+    const hiddenClientsSet = new Set();
+    const hiddenClientsList = [];
+    hiddenResult.records.forEach(r => {
+      const v = r.get("value");
+      if (v) {
+        hiddenClientsSet.add(v.trim().toLowerCase());
+        if (!hiddenClientsList.includes(v.trim())) {
+          hiddenClientsList.push(v.trim());
+        }
+      }
+    });
+
+    if (result.records.length > 0) {
+      const rec = result.records[0];
+      const pSkills = cleanSkillList(rec.get("primarySkillsRaw"));
+      const sSkills = cleanSkillList(rec.get("secondarySkillsRaw"));
+      const allSkills = Array.from(new Set([...pSkills, ...sSkills])).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+      res.json({
+        success: true,
+        options: {
+          clientName: clean(rec.get("clients")).filter(c => c && !hiddenClientsSet.has(c.trim().toLowerCase())),
+          country: clean(rec.get("countries")),
+          location: clean(rec.get("locations")),
+          interviewer1: clean(rec.get("uandweInterviewers")),
+          interviewer2: clean(rec.get("clientInterviewers")),
+          recruiterPOC: clean(rec.get("recruiters")),
+          sales: clean(rec.get("sales")),
+          primarySkill: pSkills,
+          secondarySkill: sSkills,
+          allSkills: allSkills
+        },
+        hiddenClients: hiddenClientsList,
+        hiddenOptions: { clientName: hiddenClientsList }
+      });
+    } else {
+      res.json({
+        success: true,
+        options: {
+          clientName: [],
+          country: [],
+          location: [],
+          interviewer1: [],
+          interviewer2: [],
+          recruiterPOC: [],
+          sales: [],
+          primarySkill: [],
+          secondarySkill: [],
+          allSkills: []
+        },
+        hiddenClients: hiddenClientsList,
+        hiddenOptions: { clientName: hiddenClientsList }
+      });
+    }
+  } catch (err) {
+    console.error("❌ Error fetching field options:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch field options",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * =================================================
+ * POST – Hide Field Option from Dropdowns (Admin)
+ * =================================================
+ */
+router.post("/field-options/hide", async (req, res) => {
+  const { field, value } = req.body;
+  if (!field || !value) {
+    return res.status(400).json({ success: false, message: "Field and value are required" });
+  }
+
+  const driver = getDriver();
+  const session = driver.session();
+  const trimmedVal = String(value).trim();
+
+  try {
+    await session.run(
+      `MERGE (h:HiddenDemandOption { field: $field, valueLower: toLower($trimmedVal) })
+       ON CREATE SET h.value = $trimmedVal, h.createdAt = datetime()
+       ON MATCH SET h.value = $trimmedVal
+       RETURN h`,
+      { field, trimmedVal }
+    );
+
+    res.json({
+      success: true,
+      message: `"${trimmedVal}" hidden from ${field} dropdown`,
+      field,
+      value: trimmedVal
+    });
+  } catch (err) {
+    console.error("❌ Error hiding field option:", err.message);
+    res.status(500).json({ success: false, message: "Failed to hide option", error: err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * =================================================
+ * POST – Unhide / Restore Field Option to Dropdowns (Admin)
+ * =================================================
+ */
+router.post("/field-options/unhide", async (req, res) => {
+  const { field, value } = req.body;
+  if (!field || !value) {
+    return res.status(400).json({ success: false, message: "Field and value are required" });
+  }
+
+  const driver = getDriver();
+  const session = driver.session();
+  const trimmedVal = String(value).trim();
+
+  try {
+    await session.run(
+      `MATCH (h:HiddenDemandOption { field: $field })
+       WHERE toLower(h.value) = toLower($trimmedVal) OR h.valueLower = toLower($trimmedVal)
+       DELETE h`,
+      { field, trimmedVal }
+    );
+
+    res.json({
+      success: true,
+      message: `"${trimmedVal}" restored to ${field} dropdown`,
+      field,
+      value: trimmedVal
+    });
+  } catch (err) {
+    console.error("❌ Error unhiding field option:", err.message);
+    res.status(500).json({ success: false, message: "Failed to restore option", error: err.message });
   } finally {
     await session.close();
   }
