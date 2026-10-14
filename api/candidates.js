@@ -1233,6 +1233,23 @@ router.get("/:id", async (req, res) => {
 });
 
 
+const isValidCTC = (val) => {
+  if (val === undefined || val === null) return false;
+  const str = String(val).trim();
+  if (!/^\$?\s*\d+$/.test(str)) return false;
+  const digits = str.replace(/[^\d]/g, '');
+  return digits.length > 0 && Number(digits) > 0;
+};
+
+const sanitizeCTC = (val) => {
+  if (!val) return "";
+  const str = String(val).trim();
+  const hasDollar = str.includes('$');
+  const digits = str.replace(/\D/g, '').replace(/^0+/, '');
+  if (!digits) return "";
+  return hasDollar ? `$${digits}` : digits;
+};
+
 router.post("/", upload.single('resume'), async (req, res) => {
 
 
@@ -1244,6 +1261,20 @@ router.post("/", upload.single('resume'), async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Name, email, and mobile are required fields"
+      });
+    }
+
+    if (!isValidCTC(req.body.currentCTC)) {
+      return res.status(400).json({
+        success: false,
+        message: "Current CTC is required, must contain only numbers (optional $ symbol allowed), and cannot be 0"
+      });
+    }
+
+    if (!isValidCTC(req.body.expectedCTC)) {
+      return res.status(400).json({
+        success: false,
+        message: "Expected CTC is required, must contain only numbers (optional $ symbol allowed), and cannot be 0"
       });
     }
 
@@ -1358,8 +1389,8 @@ router.post("/", upload.single('resume'), async (req, res) => {
       "Mobile No": req.body.mobile,
       "Experience": req.body.experience || "",
       "Current Org": req.body.currentOrg || "",
-      "Current CTC": req.body.currentCTC || "",
-      "Expected CTC": req.body.expectedCTC || "",
+      "Current CTC": sanitizeCTC(req.body.currentCTC),
+      "Expected CTC": sanitizeCTC(req.body.expectedCTC),
       "Notice Period in days": req.body.noticePeriod || "",
       "Profiles sourced by": req.body.profileSourcedBy || "",
       "Client Name": req.body.clientName || "",
@@ -1639,6 +1670,24 @@ router.put("/:id", upload.single('resume'), async (req, res) => {
       });
     }
 
+    if (req.body.currentCTC !== undefined && req.body.currentCTC !== null && String(req.body.currentCTC).trim() !== "") {
+      if (!isValidCTC(req.body.currentCTC)) {
+        return res.status(400).json({
+          success: false,
+          message: "Current CTC must contain only numbers (optional $ symbol allowed) and cannot be 0"
+        });
+      }
+    }
+
+    if (req.body.expectedCTC !== undefined && req.body.expectedCTC !== null && String(req.body.expectedCTC).trim() !== "") {
+      if (!isValidCTC(req.body.expectedCTC)) {
+        return res.status(400).json({
+          success: false,
+          message: "Expected CTC must contain only numbers (optional $ symbol allowed) and cannot be 0"
+        });
+      }
+    }
+
     // Initialize storage variables with existing values
     let googleDriveFileId = formattedExisting.googleDriveFileId;
     let googleDriveViewLink = formattedExisting.googleDriveViewLink;
@@ -1716,8 +1765,8 @@ router.put("/:id", upload.single('resume'), async (req, res) => {
       "Mobile No": req.body.mobile,
       "Experience": req.body.experience || formattedExisting.experience || "",
       "Current Org": req.body.currentOrg || formattedExisting.currentOrg || "",
-      "Current CTC": req.body.currentCTC || formattedExisting.currentCTC || "",
-      "Expected CTC": req.body.expectedCTC || formattedExisting.expectedCTC || "",
+      "Current CTC": req.body.currentCTC ? sanitizeCTC(req.body.currentCTC) : (formattedExisting.currentCTC || ""),
+      "Expected CTC": req.body.expectedCTC ? sanitizeCTC(req.body.expectedCTC) : (formattedExisting.expectedCTC || ""),
       "Notice Period in days": req.body.noticePeriod || formattedExisting.noticePeriod || "",
       "Profiles sourced by": req.body.profileSourcedBy || formattedExisting.profileSourcedBy || "",
       "Client Name": req.body.clientName || formattedExisting.clientName || "",
