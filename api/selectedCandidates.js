@@ -383,6 +383,21 @@ router.put("/status", async (req, res) => {
     const demand = getResult.records[0].get('d').properties;
     const clientName = demand.client || demand.clientName || demand.ClientName;
 
+    // Candidates in Joined, Pending Offer, Pending Joinee, or Offer Decline can only have their status changed by Admin
+    const LOCKED_STATUSES = ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline'];
+    const currentStatus = relationship.status;
+
+    const userRoles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role || ''];
+    const isAdmin = userRoles.some(r => r && r.toLowerCase() === 'admin') || 
+                    (req.body.userRole && (Array.isArray(req.body.userRole) ? req.body.userRole : [req.body.userRole]).some(r => r && String(r).toLowerCase() === 'admin'));
+
+    if (LOCKED_STATUSES.includes(currentStatus) && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: `Candidate status is '${currentStatus}'. Only Admin can change the status of profiles in this category.`
+      });
+    }
+
     // console.log("DEMAND OBJECT:", demand);
     // console.log("CLIENT NAME VALUE:", clientName);
 
@@ -465,7 +480,7 @@ router.put("/status", async (req, res) => {
       });
       // console.log(`✅ Updated candidate ${candidateId} isInProgress to ${isInProgress}`);
     } catch (syncErr) {
-      console.error('⚠️ Failed to sync progress status:', syncErr.message);
+      // console.error('⚠️ Failed to sync progress status:', syncErr.message);
       // Don't fail the main request if sync fails
     }
 
@@ -726,6 +741,21 @@ router.put("/status-with-zone", async (req, res) => {
     const demand = getResult.records[0].get('d').properties;
     const clientName = demand.client || demand.clientName || demand.ClientName;
 
+    // Candidates in Joined, Pending Offer, Pending Joinee, or Offer Decline can only have their status changed by Admin
+    const LOCKED_STATUSES = ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline'];
+    const currentStatus = relationship.status;
+
+    const userRoles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role || ''];
+    const isAdmin = userRoles.some(r => r && r.toLowerCase() === 'admin') || 
+                    (req.body.userRole && (Array.isArray(req.body.userRole) ? req.body.userRole : [req.body.userRole]).some(r => r && String(r).toLowerCase() === 'admin'));
+
+    if (LOCKED_STATUSES.includes(currentStatus) && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: `Candidate status is '${currentStatus}'. Only Admin can change the status of profiles in this category.`
+      });
+    }
+
     // Define active statuses
     const activeStatuses = [
       'In Progress',
@@ -828,7 +858,7 @@ router.put("/status-with-zone", async (req, res) => {
           console.log(`ℹ️ Candidate ${candidateId} was not in Zone for client: ${clientName}`);
         }
       } catch (zoneErr) {
-        console.error(`⚠️ Failed to remove from Zone:`, zoneErr.message);
+        // console.error(`⚠️ Failed to remove from Zone:`, zoneErr.message);
         // Don't fail the main request if zone removal fails
       }
     }
