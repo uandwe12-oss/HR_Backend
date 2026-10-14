@@ -36,6 +36,7 @@ const PF_PASSBOOK_FOLDER_ID = '1F8V1dPTag5Utrj4vUHFZj5g0_kYxJCJZ'; // For PF Pas
 const TIMESHEET_FOLDER_ID = '1p4yAZEn-lNy9yRpY2HVPRbKV3odr0TQb'; // For Timesheet images and documents
 const ASSET_RELEASE_FOLDER_ID = '1W3esDZCc5JVlSNpFH6g3oE8Tati5CUGI'; // For Asset Release Images
 const TRAINING_FOLDER_ID = '1x6FPrH9A0cgMdQawYN9l40DM3jK-hyWQ'; // For Training Materials
+const DOCUMENT_FOLDER_ID = '1jvWAwU35fF8blIWE2RTuXsTmjpcwCefy'; // For Document Management Module (SPO/PPO, Files & Sub-files)
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
@@ -420,7 +421,9 @@ async function uploadDocumentToFolder(fileBuffer, originalName, mimeType, userId
       fileId: response.data.id,
       fileName: response.data.name,
       viewLink: response.data.webViewLink,
-      directLink: `https://drive.google.com/uc?id=${response.data.id}`
+      directLink: `https://drive.google.com/uc?id=${response.data.id}`,
+      downloadLink: response.data.webContentLink || `https://drive.google.com/uc?export=download&id=${response.data.id}`,
+      folderId: folderId
     };
   } catch (error) {
     console.error(`❌ ${docType} upload error:`, error.message);
@@ -723,11 +726,11 @@ async function deleteFileFromDrive(fileId) {
     const auth = await authorize();
     if (!auth) throw new Error('Authorization failed');
     const drive = google.drive({ version: 'v3', auth });
-    
+
     await drive.files.delete({
       fileId: fileId
     });
-    
+
     console.log(`✅ File ${fileId} deleted from Google Drive`);
     return { success: true, message: "File deleted successfully" };
   } catch (error) {
@@ -748,6 +751,7 @@ module.exports = {
   authorize,
   testConnection,
   DRIVE_FOLDER_ID,
+  DOCUMENT_FOLDER_ID,
 
   // Specific upload functions
   uploadAadharImage,
