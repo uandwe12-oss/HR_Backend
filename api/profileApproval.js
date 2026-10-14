@@ -82,8 +82,10 @@ router.get("/admin/profiles", async (req, res) => {
         submissionDate: p.createdAt,
         approvalStatus: p.profileStatus || "PENDING",
         rejectionReason: p.profileRejectionReason || "",
+        deactivationReason: p.profileDeactivationReason || "",
         submittedAt: p.profileSubmittedAt,
         approvedAt: p.profileApprovedAt,
+        deactivatedAt: p.profileDeactivatedAt,
         role: record.get("role"),
         department: record.get("department") || "Not Specified"
       };
@@ -201,6 +203,8 @@ router.put("/admin/approve/:userId", async (req, res) => {
     cleanedProfile.updatedAt = now;
     delete cleanedProfile.profileRejectionReason;
     delete cleanedProfile.profileRejectedAt;
+    delete cleanedProfile.profileDeactivatedAt;
+    delete cleanedProfile.profileDeactivationReason;
 
     const result = await session.run(
       `MATCH (p:PersonalDetails {userId: $userId})
@@ -216,6 +220,12 @@ router.put("/admin/approve/:userId", async (req, res) => {
     if (result.records.length === 0) {
       return res.status(404).json({ success: false, message: "Profile not found" });
     }
+
+    await session.run(
+      `MATCH (u:User {username: $userId})
+       SET u.profileStatus = 'APPROVED'`,
+      { userId }
+    );
 
     // Create notification for the user
     await session.run(`
@@ -335,6 +345,156 @@ router.put("/admin/reject/:userId", async (req, res) => {
   }
 });
 
+// Deactivate profile
+router.put("/admin/deactivate/:userId", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  const session = driver.session();
+  const { userId } = req.params;
+  const { deactivationReason } = req.body || {};
+
+  try {
+    const getResult = await session.run(
+      `MATCH (p:PersonalDetails {userId: $userId}) RETURN p`,
+      { userId }
+    );
+
+    if (getResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Profile not found" });
+    }
+
+    const currentProfile = getResult.records[0].get('p').properties;
+    const now = new Date().toISOString();
+    const cleanedProfile = cleanProfileData(currentProfile);
+
+    cleanedProfile.profileStatus = 'DEACTIVATED';
+    cleanedProfile.profileDeactivatedAt = now;
+    if (deactivationReason && deactivationReason.trim()) {
+      cleanedProfile.profileDeactivationReason = deactivationReason.trim();
+    }
+    cleanedProfile.updatedAt = now;
+
+    await session.run(
+      `MATCH (p:PersonalDetails {userId: $userId})
+       SET p = $data
+       RETURN p`,
+      { userId, data: cleanedProfile }
+    );
+
+    await session.run(
+      `MATCH (u:User {username: $userId})
+       SET u.profileStatus = 'DEACTIVATED'`,
+      { userId }
+    );
+
+    // Create notification for the user
+    await session.run(`
+      CREATE (n:Notification {
+        id: randomUUID(),
+        userId: $userId,
+        type: 'PROFILE_STATUS',
+        message: 'Your profile has been deactivated by an administrator.',
+        createdAt: $createdAt,
+        isRead: false,
+        relatedId: $userId
+      })
+    `, { userId, createdAt: now });
+
+    res.json({
+      success: true,
+      message: "Profile deactivated successfully",
+      data: {
+        userId,
+        status: 'DEACTIVATED',
+        deactivatedAt: now
+      }
+    });
+
+  } catch (err) {
+    console.error("Error deactivating profile:", err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// Reactivate profile
+router.put("/admin/reactivate/:userId", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) {
+    return res.status(500).json({ success: false, message: "Database connection not available" });
+  }
+
+  const session = driver.session();
+  const { userId } = req.params;
+
+  try {
+    const getResult = await session.run(
+      `MATCH (p:PersonalDetails {userId: $userId}) RETURN p`,
+      { userId }
+    );
+
+    if (getResult.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Profile not found" });
+    }
+
+    const currentProfile = getResult.records[0].get('p').properties;
+    const now = new Date().toISOString();
+    const cleanedProfile = cleanProfileData(currentProfile);
+
+    cleanedProfile.profileStatus = 'APPROVED';
+    cleanedProfile.profileReactivatedAt = now;
+    cleanedProfile.updatedAt = now;
+    delete cleanedProfile.profileDeactivatedAt;
+    delete cleanedProfile.profileDeactivationReason;
+
+    await session.run(
+      `MATCH (p:PersonalDetails {userId: $userId})
+       SET p = $data
+       RETURN p`,
+      { userId, data: cleanedProfile }
+    );
+
+    await session.run(
+      `MATCH (u:User {username: $userId})
+       SET u.profileStatus = 'APPROVED'`,
+      { userId }
+    );
+
+    // Create notification for the user
+    await session.run(`
+      CREATE (n:Notification {
+        id: randomUUID(),
+        userId: $userId,
+        type: 'PROFILE_STATUS',
+        message: 'Your profile has been reactivated.',
+        createdAt: $createdAt,
+        isRead: false,
+        relatedId: $userId
+      })
+    `, { userId, createdAt: now });
+
+    res.json({
+      success: true,
+      message: "Profile reactivated successfully",
+      data: {
+        userId,
+        status: 'APPROVED',
+        reactivatedAt: now
+      }
+    });
+
+  } catch (err) {
+    console.error("Error reactivating profile:", err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    await session.close();
+  }
+});
+
 // Get dashboard statistics
 router.get("/admin/stats", async (req, res) => {
   const driver = getDriver();
@@ -351,11 +511,12 @@ router.get("/admin/stats", async (req, res) => {
          COUNT(CASE WHEN p.profileStatus = 'PENDING' THEN 1 END) as pending,
          COUNT(CASE WHEN p.profileStatus = 'APPROVED' THEN 1 END) as approved,
          COUNT(CASE WHEN p.profileStatus = 'REJECTED' THEN 1 END) as rejected,
+         COUNT(CASE WHEN p.profileStatus = 'DEACTIVATED' THEN 1 END) as deactivated,
          COUNT(p) as total
       `
     );
 
-    let stats = { total: 0, pending: 0, approved: 0, rejected: 0 };
+    let stats = { total: 0, pending: 0, approved: 0, rejected: 0, deactivated: 0 };
     if (result.records.length > 0) {
       const toNum = (val) => {
         if (val === null || val === undefined) return 0;
@@ -365,7 +526,8 @@ router.get("/admin/stats", async (req, res) => {
         total: toNum(result.records[0].get("total")),
         pending: toNum(result.records[0].get("pending")),
         approved: toNum(result.records[0].get("approved")),
-        rejected: toNum(result.records[0].get("rejected"))
+        rejected: toNum(result.records[0].get("rejected")),
+        deactivated: toNum(result.records[0].get("deactivated"))
       };
     }
 
