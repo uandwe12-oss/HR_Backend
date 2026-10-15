@@ -7,6 +7,7 @@ const fs = require('fs');
 const { initializeAllExports } = require('./services/autoExportMaster.js');
 const EXPORT_CONFIGS = require('./services/exportConfigs.js');
 const { startAutoCancelAssetReleaseScheduler } = require('./services/autoCancelAssetRelease.js');
+const { startDocumentExpiryScheduler, checkAndSendDocumentExpiryNotifications } = require('./services/documentExpiryNotifier.js');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -16,6 +17,11 @@ async function initializeServices() {
   
   // Start the Asset Release auto canceler (this is not an export)
   startAutoCancelAssetReleaseScheduler();
+
+  // Start the 2-Month Document Expiry Notification Scheduler
+  startDocumentExpiryScheduler();
+  checkAndSendDocumentExpiryNotifications().catch(e => console.warn('⚠️ Initial document expiry check warning:', e.message));
+  
   
   const exporter = initializeAllExports(EXPORT_CONFIGS);
   
@@ -151,6 +157,8 @@ app.use("/api/news", verifyToken, require("./api/news"));
 app.use("/api/field-config", verifyToken, require("./api/fieldConfig"));
 app.use("/api/home-config", verifyToken, require("./api/homeConfig"));
 app.use("/api/training", verifyToken, require("./api/training"));
+app.use("/api/document", verifyToken, require("./api/document"));
+
 
 /* ================================
    TEST ROUTE
