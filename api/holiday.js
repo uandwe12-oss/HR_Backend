@@ -39,11 +39,18 @@ router.get("/group/:groupName", async (req, res) => {
   const session = driver.session();
   try {
     const result = await session.run(
-      `MATCH (g:Group {name: $groupName})
+      `MATCH (g:Group)
+       WHERE toLower(g.name) = toLower($groupName)
+          OR replace(toLower(g.name), ' ', '') = replace(toLower($groupName), ' ', '')
+          OR (g.client IS NOT NULL AND toLower(g.client) = toLower($groupName))
+          OR (g.client IS NOT NULL AND replace(toLower(g.client), ' ', '') = replace(toLower($groupName), ' ', ''))
+          OR toLower(g.name) CONTAINS toLower($groupName)
+          OR toLower($groupName) CONTAINS toLower(g.name)
+          OR (g.client IS NOT NULL AND toLower($groupName) CONTAINS toLower(g.client))
        OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
        WITH DISTINCT linkedGroup
        MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
-       RETURN h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type, h.notes AS notes
+       RETURN DISTINCT h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type, h.notes AS notes
        ORDER BY h.date`,
       { groupName }
     );
@@ -263,12 +270,19 @@ router.get("/upcoming", async (req, res) => {
       const normalized = searchGroup.toLowerCase().replace(/\s+/g, '');
       // Removed hardcoded logic
       result = await session.run(
-        `MATCH (g:Group {name: $searchGroup})
+        `MATCH (g:Group)
+         WHERE toLower(g.name) = toLower($searchGroup)
+            OR replace(toLower(g.name), ' ', '') = replace(toLower($searchGroup), ' ', '')
+            OR (g.client IS NOT NULL AND toLower(g.client) = toLower($searchGroup))
+            OR (g.client IS NOT NULL AND replace(toLower(g.client), ' ', '') = replace(toLower($searchGroup), ' ', ''))
+            OR toLower(g.name) CONTAINS toLower($searchGroup)
+            OR toLower($searchGroup) CONTAINS toLower(g.name)
+            OR (g.client IS NOT NULL AND toLower($searchGroup) CONTAINS toLower(g.client))
          OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
          WITH DISTINCT linkedGroup
          MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
          WHERE h.date >= $today
-         RETURN h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type
+         RETURN DISTINCT h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type
          ORDER BY h.date LIMIT 10`,
         { searchGroup, today }
       );
