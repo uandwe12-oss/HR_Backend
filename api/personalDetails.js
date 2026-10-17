@@ -475,6 +475,25 @@ router.get("/draft/:userId", async (req, res) => {
   }
 });
 
+router.delete("/draft/:userId", async (req, res) => {
+  const driver = getDriver();
+  if (!driver) return res.status(500).json({ success: false, message: "No db connection" });
+  const session = driver.session();
+  try {
+    const { userId } = req.params;
+    await session.run(`
+      MATCH (d:PersonalDetailsDraft {userId: $userId})
+      DETACH DELETE d
+    `, { userId });
+    res.json({ success: true, message: "Draft deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting draft:", error);
+    res.status(500).json({ success: false, message: "Failed to delete draft" });
+  } finally {
+    await session.close();
+  }
+});
+
 router.post("/", (req, res, next) => {
   const uploadMiddleware = upload.fields([
     { name: 'aadharDocument', maxCount: 1 },
@@ -1077,6 +1096,12 @@ router.post("/", (req, res, next) => {
       { message: adminMessage, currentTime }
     );
 
+    // Clean up temporary draft node if it exists since profile is officially submitted
+    await session.run(
+      `MATCH (d:PersonalDetailsDraft {userId: $userId})
+       DETACH DELETE d`,
+      { userId }
+    );
 
     return res.status(201).json({
       success: true,
@@ -1726,6 +1751,12 @@ router.put("/resubmit/:userId", (req, res, next) => {
       { userId, pid: pidToUse }
     );
 
+    // Clean up temporary draft node if it exists since profile is officially resubmitted
+    await session.run(
+      `MATCH (d:PersonalDetailsDraft {userId: $userId})
+       DETACH DELETE d`,
+      { userId }
+    );
 
     return res.status(201).json({
       success: true,
