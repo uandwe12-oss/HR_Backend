@@ -71,10 +71,12 @@ router.get("/", async (req, res) => {
         : [];
       subfolders.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
-      // Calculate dynamic active / expired status based on endDate
+      // Calculate dynamic active / expired / closed status based on f.status and endDate
       const today = new Date().toISOString().split("T")[0];
       let computedStatus = f.status || "Active";
-      if (f.endDate && f.endDate < today) {
+      if (f.status === "Closed") {
+        computedStatus = "Closed";
+      } else if (f.endDate && f.endDate < today) {
         computedStatus = "Expired";
       } else if (f.startDate && f.startDate > today) {
         computedStatus = "Upcoming";
@@ -102,6 +104,212 @@ router.get("/", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch document folders",
+      error: error.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * Robust date parser supporting DD-MM-YYYY, YYYY-MM-DD, ISO, etc.
+ */
+function parseDateRobust(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const trimmed = dateStr.trim();
+  const dmyMatch = trimmed.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    const month = parseInt(dmyMatch[2], 10) - 1;
+    const year = parseInt(dmyMatch[3], 10);
+    const d = new Date(year, month, day);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(trimmed);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * =========================================================================
+ * GET /api/document/expiring-count
+ * Ultra-lightweight endpoint returning only the count of documents expiring in <= 60 days.
+ * Specifically designed for dashboard badges (Home.jsx) to avoid loading heavy document trees.
+ * =========================================================================
+ */
+router.get("/expiring-count", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const maxDays = parseInt(req.query.days, 10) || 60;
+
+  try {
+    const result = await session.run(
+      `MATCH (f:DocumentFolder)
+       WHERE f.endDate IS NOT NULL 
+         AND trim(f.endDate) <> ""
+         AND (f.status IS NULL OR NOT f.status IN ['Closed', 'Archived'])
+       RETURN f.id as id, f.endDate as endDate, f.status as status`
+    );
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let count = 0;
+    for (const record of result.records) {
+      const endDateStr = record.get("endDate");
+      const status = record.get("status");
+      if (status === 'Closed' || status === 'Archived') continue;
+
+      const endDate = parseDateRobust(endDateStr);
+      if (!endDate) continue;
+      endDate.setHours(0, 0, 0, 0);
+
+      const diffDays = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays >= 0 && diffDays <= maxDays) {
+        count++;
+      }
+    }
+
+    res.json({
+      success: true,
+      count
+    });
+  } catch (error) {
+    console.error("❌ Error fetching expiring document count:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch expiring document count",
+      error: error.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * =========================================================================
+ * GET /api/document/expiring
+ * Server-side filtered & sorted endpoint for documents expiring within <= 60 days.
+ * Supports query params:
+ *   - days: number (default 60)
+ *   - urgency: 'all' | 'critical' (<=15d) | 'medium' (16-30d) | 'approaching' (31-60d)
+ *   - category: category name or 'All'
+ *   - search: string search term
+ * =========================================================================
+ */
+router.get("/expiring", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+
+  const maxDays = parseInt(req.query.days, 10) || 60;
+  const urgencyFilter = req.query.urgency || "all";
+  const categoryFilter = req.query.category || "All";
+  const searchFilter = (req.query.search || "").trim().toLowerCase();
+
+  try {
+    const result = await session.run(
+      `MATCH (f:DocumentFolder)
+       WHERE f.endDate IS NOT NULL 
+         AND trim(f.endDate) <> ""
+         AND (f.status IS NULL OR NOT f.status IN ['Closed', 'Archived'])
+       OPTIONAL MATCH (parent:DocumentFolder)-[:HAS_SUBFOLDER]->(f)
+       OPTIONAL MATCH (f)-[:CONTAINS_DOCUMENT]->(d:DocumentItem)
+       RETURN f, parent.id as parentId, parent.name as parentName, collect(DISTINCT d) as documents
+       ORDER BY f.endDate ASC`
+    );
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const counts = {
+      all: 0,
+      critical: 0,    // 0 - 15 days
+      medium: 0,      // 16 - 30 days
+      approaching: 0  // 31 - 60 days
+    };
+
+    const expiringItems = [];
+
+    for (const record of result.records) {
+      const f = record.get("f").properties;
+      const parentId = record.get("parentId") || f.parentFolderId || null;
+      const parentName = record.get("parentName") || null;
+      const rawDocs = record.get("documents");
+      const documents = rawDocs
+        ? rawDocs.map(d => d && d.properties).filter(d => d && d.id)
+        : [];
+      documents.sort((a, b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0));
+
+      if (f.status === 'Closed' || f.status === 'Archived') continue;
+
+      const endDate = parseDateRobust(f.endDate);
+      if (!endDate) continue;
+      endDate.setHours(0, 0, 0, 0);
+
+      const diffDays = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays < 0 || diffDays > maxDays) continue;
+
+      // Classify urgency
+      let urgencyTier = 'approaching';
+      if (diffDays <= 15) {
+        urgencyTier = 'critical';
+        counts.critical++;
+      } else if (diffDays <= 30) {
+        urgencyTier = 'medium';
+        counts.medium++;
+      } else {
+        urgencyTier = 'approaching';
+        counts.approaching++;
+      }
+      counts.all++;
+
+      // Filter by urgency tier if requested
+      if (urgencyFilter !== 'all' && urgencyTier !== urgencyFilter) {
+        continue;
+      }
+
+      // Filter by category if requested
+      if (categoryFilter !== 'All' && f.category !== categoryFilter) {
+        continue;
+      }
+
+      // Filter by search query if requested
+      if (searchFilter) {
+        const nameMatch = (f.name || '').toLowerCase().includes(searchFilter);
+        const descMatch = (f.description || '').toLowerCase().includes(searchFilter);
+        const catMatch = (f.category || '').toLowerCase().includes(searchFilter);
+        const parentMatch = parentName ? parentName.toLowerCase().includes(searchFilter) : false;
+        const docMatch = documents.some(d => (d.name || '').toLowerCase().includes(searchFilter));
+
+        if (!nameMatch && !descMatch && !catMatch && !parentMatch && !docMatch) {
+          continue;
+        }
+      }
+
+      expiringItems.push({
+        ...f,
+        parentFolderId: parentId,
+        parentFolderName: parentName,
+        daysRemaining: diffDays,
+        urgency: urgencyTier,
+        documentsCount: documents.length,
+        documents: documents
+      });
+    }
+
+    // Sort ascending by daysRemaining (most urgent first)
+    expiringItems.sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+    res.json({
+      success: true,
+      totalCount: counts.all,
+      counts,
+      data: expiringItems
+    });
+  } catch (error) {
+    console.error("❌ Error fetching expiring documents:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch expiring documents",
       error: error.message
     });
   } finally {
@@ -382,6 +590,95 @@ router.put("/folder/:id", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update document folder",
+      error: error.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * =========================================================================
+ * PUT /api/document/folder/:id/close - Mark document folder as Closed
+ * Stops all recurring weekly reminder emails for this document
+ * =========================================================================
+ */
+router.put("/folder/:id/close", async (req, res) => {
+  const { id } = req.params;
+  const closedBy = req.user?.username || req.user?.email || "Admin";
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    const result = await session.run(
+      `MATCH (f:DocumentFolder { id: $id })
+       SET f.status = 'Closed',
+           f.closedAt = datetime(),
+           f.closedBy = $closedBy,
+           f.updatedAt = datetime()
+       RETURN f`,
+      { id, closedBy }
+    );
+
+    if (result.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Document folder not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Document marked as Closed. Weekly reminder emails have been stopped.",
+      data: result.records[0].get("f").properties
+    });
+  } catch (error) {
+    console.error(`❌ Error closing document folder ${id}:`, error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to close document folder",
+      error: error.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * =========================================================================
+ * PUT /api/document/folder/:id/reopen - Reopen a Closed document folder
+ * Restores status to Active
+ * =========================================================================
+ */
+router.put("/folder/:id/reopen", async (req, res) => {
+  const { id } = req.params;
+  const reopenedBy = req.user?.username || req.user?.email || "Admin";
+  const driver = getDriver();
+  const session = driver.session();
+
+  try {
+    const result = await session.run(
+      `MATCH (f:DocumentFolder { id: $id })
+       SET f.status = 'Active',
+           f.reopenedAt = datetime(),
+           f.reopenedBy = $reopenedBy,
+           f.updatedAt = datetime()
+       REMOVE f.closedAt, f.closedBy
+       RETURN f`,
+      { id, reopenedBy }
+    );
+
+    if (result.records.length === 0) {
+      return res.status(404).json({ success: false, message: "Document folder not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Document reopened as Active.",
+      data: result.records[0].get("f").properties
+    });
+  } catch (error) {
+    console.error(`❌ Error reopening document folder ${id}:`, error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reopen document folder",
       error: error.message
     });
   } finally {
