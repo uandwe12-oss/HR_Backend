@@ -18,24 +18,33 @@ function parseDateRobust(dateStr) {
 }
 
 /**
- * Checks all DocumentFolder nodes for files/documents nearing expiration (within 2 months / 60 days).
- * Sends a notification email to administrators and marks the item so duplicate emails are prevented.
+ * Checks all DocumentFolder nodes for files/documents nearing expiration (within 60 days).
+ * Rules:
+ * 1. Initial 60-Day Notice: Sent when a document enters the <= 60 day window.
+ * 2. Weekly Monday Reminder: Dispatched every Monday morning (09:00 AM IST) as long as diffDays <= 60.
+ * 3. Stop When Closed: If status === 'Closed', no emails are ever sent.
+ * 4. Testing Recipient: Strictly bharill@kyotralis.com for current testing phase.
  */
 async function checkAndSendDocumentExpiryNotifications(options = {}) {
   const driver = getDriver();
   const session = driver.session();
   const force = options && options.force === true;
+  const forceMonday = options && (options.forceMonday === true || options.monday === true || force);
 
   try {
-    console.log(`🔍 [Document Expiry Notifier] Checking for documents expiring in the next 2 months...${force ? ' (Force mode: including previously notified)' : ''}`);
+    // Current date and weekday in Asia/Kolkata
+    const istDayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'short', timeZone: 'Asia/Kolkata' }); // e.g. "Mon"
+    const isMonday = istDayOfWeek === 'Mon' || forceMonday === true;
+    const istTodayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
 
-    // 1. Fetch all active files/documents with an endDate
+    console.log(`🔍 [Document Expiry Notifier] Checking documents expiring within 60 days (Today: ${istTodayStr}, Day: ${istDayOfWeek}, IsMonday: ${isMonday})...`);
+
+    // 1. Fetch all documents/folders that have an endDate and are NOT Closed or Archived
     const query = `
       MATCH (f:DocumentFolder)
       WHERE f.endDate IS NOT NULL 
         AND trim(f.endDate) <> ""
-        AND (f.status IS NULL OR f.status = "Active")
-        ${force ? "" : "AND (f.expiryNotificationSent IS NULL OR f.expiryNotificationSent = false)"}
+        AND (f.status IS NULL OR NOT f.status IN ['Closed', 'Archived'])
       OPTIONAL MATCH (parent:DocumentFolder)-[:HAS_SUBFOLDER]->(f)
       OPTIONAL MATCH (f)-[:CONTAINS_DOCUMENT]->(doc:DocumentItem)
       RETURN f, parent.name as parentName, collect(DISTINCT doc.name) as documentNames
@@ -45,7 +54,7 @@ async function checkAndSendDocumentExpiryNotifications(options = {}) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const expiringItems = [];
+    const itemsToNotify = [];
 
     for (const record of result.records) {
       const f = record.get("f").properties;
@@ -53,43 +62,61 @@ async function checkAndSendDocumentExpiryNotifications(options = {}) {
       const documentNames = record.get("documentNames") || [];
 
       if (!f.endDate) continue;
+      if (f.status === 'Closed' || f.status === 'Archived') continue;
 
       const endDate = parseDateRobust(f.endDate);
       if (!endDate) continue;
       endDate.setHours(0, 0, 0, 0);
 
-      // Difference in days
+      // Difference in days between endDate and today
       const diffMs = endDate.getTime() - today.getTime();
       const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
 
-      // 2 months notice window: between 0 and 62 days before endDate (covers 2 full calendar months)
-      if (diffDays >= 0 && diffDays <= 62) {
-        expiringItems.push({
-          id: f.id,
-          name: f.name,
-          category: f.category || 'General',
-          startDate: f.startDate || 'N/A',
-          endDate: f.endDate,
-          description: f.description || '',
-          parentName: parentName,
-          documentNames: documentNames,
-          createdBy: f.createdBy,
-          diffDays: diffDays
-        });
+      // 60-day window: between 0 and 60 days
+      if (diffDays < 0 || diffDays > 60) {
+        continue;
       }
+
+      // Check notification triggers:
+      // Condition A: Initial 60-day alert (has never been notified)
+      const needsInitialNotice = !f.expiryNotificationSent;
+
+      // Condition B: Weekly Monday reminder (already had initial notice, today is Monday, and not yet sent today)
+      const needsMondayReminder = f.expiryNotificationSent === true && isMonday && (f.lastExpiryReminderDate !== istTodayStr || force);
+
+      if (!needsInitialNotice && !needsMondayReminder) {
+        // Not eligible today (either already notified and today is not Monday, or already notified earlier today)
+        continue;
+      }
+
+      const noticeType = needsInitialNotice ? 'INITIAL' : 'WEEKLY_REMINDER';
+
+      itemsToNotify.push({
+        id: f.id,
+        name: f.name,
+        category: f.category || 'General',
+        startDate: f.startDate || 'N/A',
+        endDate: f.endDate,
+        description: f.description || '',
+        parentName: parentName,
+        documentNames: documentNames,
+        createdBy: f.createdBy,
+        diffDays: diffDays,
+        reminderCount: f.reminderCount ? parseInt(f.reminderCount, 10) : 0,
+        noticeType: noticeType
+      });
     }
 
-    if (expiringItems.length === 0) {
-      console.log('✅ [Document Expiry Notifier] No documents expiring within 2 months found.');
+    if (itemsToNotify.length === 0) {
+      console.log('✅ [Document Expiry Notifier] No documents needing notification today.');
       return { checked: result.records.length, expiring: 0, emailsSent: 0 };
     }
 
-    console.log(`⚠️ [Document Expiry Notifier] Found ${expiringItems.length} document(s) expiring within 2 months.`);
+    console.log(`⚠️ [Document Expiry Notifier] Found ${itemsToNotify.length} document(s) needing notification today.`);
 
-    // 2. Fetch recipient email addresses
-    const adminEmails = new Set();
+    // 2. Fetch all notification recipients configured by Admin in the panel
+    const recipientEmails = new Set();
 
-    // === DYNAMIC: Fetch admin-configured recipients from Neo4j first ===
     try {
       const configResult = await session.run(`
         MATCH (n:NotificationConfig { type: 'documentExpiry' })
@@ -99,90 +126,80 @@ async function checkAndSendDocumentExpiryNotifications(options = {}) {
         const dbEmails = configResult.records[0].get('emails') || [];
         dbEmails.forEach((email) => {
           const clean = email.trim().toLowerCase();
-          if (clean && clean.includes('@')) adminEmails.add(clean);
+          if (clean && clean.includes('@')) recipientEmails.add(clean);
         });
-        console.log(`📋 [Document Expiry Notifier] Loaded ${adminEmails.size} recipient(s) from DB config.`);
+        console.log(`📋 [Document Expiry Notifier] Loaded ${recipientEmails.size} recipient(s) from NotificationConfig in DB: ${Array.from(recipientEmails).join(', ')}`);
       }
     } catch (cfgErr) {
       console.warn('⚠️ [Document Expiry Notifier] Could not load DB recipients:', cfgErr.message);
     }
 
-    // === FALLBACK: Use DOCUMENT_EXPIRY_NOTIFICATION_EMAILS from .env if no DB recipients configured ===
-    if (adminEmails.size === 0) {
-      const envFallback = process.env.DOCUMENT_EXPIRY_NOTIFICATION_EMAILS || process.env.ADMIN_EMAIL || '';
-      envFallback.split(',').forEach((email) => {
-        const clean = email.trim().toLowerCase();
-        if (clean && clean.includes('@')) adminEmails.add(clean);
-      });
-      if (adminEmails.size > 0) {
-        console.log(`📋 [Document Expiry Notifier] Using env fallback recipients (DOCUMENT_EXPIRY_NOTIFICATION_EMAILS): ${Array.from(adminEmails).join(', ')}`);
-      } else {
-        console.warn('⚠️ [Document Expiry Notifier] No recipients found in DB or env. Set DOCUMENT_EXPIRY_NOTIFICATION_EMAILS in .env');
+    // Fallback to environment variables if no DB configuration exists yet
+    if (recipientEmails.size === 0) {
+      const envEmails = [
+        process.env.DOCUMENT_EXPIRY_NOTIFICATION_EMAILS,
+        process.env.ADMIN_EMAIL
+      ];
+      for (const val of envEmails) {
+        if (val && typeof val === 'string') {
+          val.split(',').forEach((email) => {
+            const clean = email.trim().toLowerCase();
+            if (clean && clean.includes('@')) recipientEmails.add(clean);
+          });
+        }
       }
     }
 
-    // Plus any configured in .env (ADMIN_EMAIL, DOCUMENT_EXPIRY_NOTIFICATION_EMAILS)
-    const envEmails = [
-      process.env.ADMIN_EMAIL,
-      process.env.DOCUMENT_EXPIRY_NOTIFICATION_EMAILS
-    ];
-    for (const val of envEmails) {
-      if (val && typeof val === 'string') {
-        val.split(',').forEach((email) => {
-          const clean = email.trim().toLowerCase();
-          if (clean && clean.includes('@')) adminEmails.add(clean);
-        });
-      }
+    // Hard fallback if empty
+    if (recipientEmails.size === 0) {
+      recipientEmails.add('bharill@kyotralis.com');
     }
 
-    try {
-      const userResult = await session.run(`
-        MATCH (u:User)
-        WHERE u.role IN ['Admin', 'Management'] AND u.email IS NOT NULL AND trim(u.email) <> ""
-        RETURN DISTINCT u.email as email
-      `);
-      for (const rec of userResult.records) {
-        const em = rec.get("email");
-        if (em && em.includes('@')) adminEmails.add(em.trim().toLowerCase());
-      }
-    } catch (userErr) {
-      console.warn('⚠️ [Document Expiry Notifier] Could not query admin emails from User nodes:', userErr.message);
-    }
+    const recipients = Array.from(recipientEmails);
+    console.log(`🎯 [Document Expiry Notifier] Active notification recipients (${recipients.length}): ${recipients.join(', ')}`);
 
-    // No emails excluded
-    const EXCLUDED_EMAILS = new Set();
-
-    const recipients = Array.from(adminEmails).filter(
-      (email) => !EXCLUDED_EMAILS.has(email.toLowerCase())
-    );
-
-
-    if (recipients.length === 0) {
-      console.warn('⚠️ [Document Expiry Notifier] No email recipients found.');
-      return { checked: result.records.length, expiring: expiringItems.length, emailsSent: 0, error: 'No admin emails configured' };
-    }
-
-    // 3. Send email for each expiring document and mark as notified
+    // 3. Dispatch emails and update Neo4j records
     let sentCount = 0;
 
-    for (const item of expiringItems) {
-      const approxMonths = item.diffDays <= 30 ? '1 month' : '2 months';
-      const subject = `⚠️ [2 Months Notice] Document Approaching End Date: ${item.name} (${item.endDate})`;
+    for (const item of itemsToNotify) {
+      const isInitial = item.noticeType === 'INITIAL';
+      const approxMonths = item.diffDays <= 30 ? 'less than 1 month' : 'approx 2 months';
 
-      const text = `Document Expiration Notice
+      // Clean subject and headline: just 'Reminder' or 'Notice'
+      const subject = isInitial
+        ? `[Notice] Document Approaching End Date: ${item.name} (${item.endDate})`
+        : `[Reminder] Document Approaching End Date: ${item.name} (${item.diffDays} days remaining)`;
+
+      const badgeText = isInitial
+        ? 'EXPIRATION NOTICE'
+        : 'REMINDER';
+
+      const headerTitle = isInitial
+        ? 'Document Approaching End Date'
+        : 'Document Expiry Reminder';
+
+      const headerSubtitle = isInitial
+        ? `This document entered its 60-day expiry window with <strong>${item.diffDays} days remaining</strong> (expires ${item.endDate}).`
+        : `This document has <strong>${item.diffDays} days remaining</strong> until ${item.endDate}.`;
+
+      const text = `${isInitial ? 'Document Expiry Notice' : 'Document Expiry Reminder'}
 
 Hello Administrator,
 
-The following document is approaching its scheduled end date in approximately ${approxMonths} (${item.diffDays} days remaining):
+This is an automated notification regarding the following document approaching its end date (${item.diffDays} days remaining):
 
 • Document: ${item.name}
 • Category: ${item.category}
 ${item.parentName ? `• Folder: ${item.parentName}\n` : ''}• Start Date: ${item.startDate}
 • End Date: ${item.endDate} (${item.diffDays} days remaining)
 ${item.description ? `• Description: ${item.description}\n` : ''}${item.documentNames && item.documentNames.length > 0 ? `• Attached Files: ${item.documentNames.join(', ')}\n` : ''}
-Please review this document in the HR Portal for renewal or required action.
 
-Recruitment & Hiring Portal Document System`;
+NOTE:
+Please review this document in the HR Portal for renewal, extension, or closure. Once marked as "Closed", reminders will stop.
+
+Portal Document Link: http://localhost:5173/admin/documents
+
+Recruitment & Hiring Portal Document Compliance System`;
 
       const html = `
 <!DOCTYPE html>
@@ -191,25 +208,25 @@ Recruitment & Hiring Portal Document System`;
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px 12px; color: #1e293b;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 620px; margin: 0 auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.06);">
-    <!-- Header Banner with Gradient -->
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 24px 12px; color: #111827;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; border: 1px solid #e5e7eb;">
+    <!-- Simple Clean Header -->
     <tr>
-      <td style="background: linear-gradient(135deg, #090d16 0%, #1e293b 60%, #1e3a8a 100%); padding: 32px 28px; text-align: left;">
+      <td style="background-color: #1e293b; padding: 24px 24px; text-align: left;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
           <tr>
             <td>
-              <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #93c5fd; margin-bottom: 10px;">
-                RECRUITMENT &amp; HIRING PORTAL • DOCUMENT ALERT
+              <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px;">
+                DOCUMENT COMPLIANCE • NOTIFICATION
               </div>
-              <div style="display: inline-block; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color: #78350f; font-size: 11px; font-weight: 800; padding: 5px 12px; border-radius: 9999px; margin-bottom: 12px; border: 1px solid #fcd34d;">
-                ⏰ 2-MONTH EXPIRATION NOTICE
+              <div style="display: inline-block; background-color: #334155; color: #f8fafc; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px; margin-bottom: 10px; letter-spacing: 0.04em;">
+                ${badgeText}
               </div>
-              <h1 style="margin: 0 0 6px 0; font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">
-                Document Approaching End Date
+              <h1 style="margin: 0 0 4px 0; font-size: 18px; font-weight: 700; color: #ffffff; line-height: 1.3;">
+                ${headerTitle}
               </h1>
               <p style="margin: 0; font-size: 13px; color: #cbd5e1; line-height: 1.4;">
-                This document is scheduled to end in <strong>${item.diffDays} days</strong> (${approxMonths}). Action may be required.
+                ${headerSubtitle}
               </p>
             </td>
           </tr>
@@ -219,28 +236,30 @@ Recruitment & Hiring Portal Document System`;
 
     <!-- Main Content Area -->
     <tr>
-      <td style="padding: 28px;">
-        <p style="margin-top: 0; margin-bottom: 20px; font-size: 14px; line-height: 1.6; color: #334155;">
+      <td style="padding: 24px;">
+        <p style="margin-top: 0; margin-bottom: 18px; font-size: 13.5px; line-height: 1.6; color: #374151;">
           Hello Administrator,<br><br>
-          This is an automated compliance notification that the following file/document in your portal is reaching its validity end date. Please review this document for extension, renewal, or required action.
+          ${isInitial 
+            ? 'This is an automated notification that the following document in your portal has entered its <strong>60-day expiration window</strong>. Please review this document for renewal, extension, or closure.'
+            : 'This is a <strong>Reminder</strong> that the following document is approaching its end date. Please review this document in the HR Portal.'}
         </p>
 
-        <!-- Highlight Card -->
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 22px;">
+        <!-- Highlight Card (Simple, Neutral) -->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 20px;">
           <tr>
-            <td style="padding: 18px 20px;">
-              <div style="font-size: 17px; font-weight: 800; color: #0f172a; margin-bottom: 8px;">
+            <td style="padding: 16px 18px;">
+              <div style="font-size: 15px; font-weight: 700; color: #111827; margin-bottom: 8px;">
                 📄 ${item.name}
               </div>
               <div>
-                <span style="display: inline-block; background-color: #ede9fe; color: #6d28d9; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 9999px; border: 1px solid #ddd6fe; margin-right: 6px;">
+                <span style="display: inline-block; background-color: #f3f4f6; color: #4b5563; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; border: 1px solid #e5e7eb; margin-right: 6px;">
                   ${item.category}
                 </span>
-                <span style="display: inline-block; background-color: #fee2e2; color: #991b1b; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 9999px; border: 1px solid #fecaca; margin-right: 6px;">
-                  ⏰ ${item.diffDays} Days Remaining
+                <span style="display: inline-block; background-color: #fef2f2; color: #991b1b; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; border: 1px solid #fee2e2; margin-right: 6px;">
+                  ${item.diffDays} Days Remaining
                 </span>
                 ${item.parentName ? `
-                <span style="display: inline-block; background-color: #e0f2fe; color: #0369a1; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 9999px; border: 1px solid #bae6fd;">
+                <span style="display: inline-block; background-color: #f3f4f6; color: #4b5563; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; border: 1px solid #e5e7eb;">
                   📁 ${item.parentName}
                 </span>` : ''}
               </div>
@@ -249,22 +268,22 @@ Recruitment & Hiring Portal Document System`;
         </table>
 
         <!-- Two Column Date Highlights -->
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 22px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
           <tr>
-            <td width="48%" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px; vertical-align: top;">
-              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 4px;">
+            <td width="48%" style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 14px; vertical-align: top;">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #6b7280; margin-bottom: 4px;">
                 Start Date
               </div>
-              <div style="font-size: 15px; font-weight: 800; color: #0f172a;">
+              <div style="font-size: 14px; font-weight: 700; color: #111827;">
                 ${item.startDate || 'N/A'}
               </div>
             </td>
             <td width="4%"></td>
-            <td width="48%" style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 14px 16px; vertical-align: top;">
-              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #b91c1c; margin-bottom: 4px;">
+            <td width="48%" style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 14px; vertical-align: top;">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #6b7280; margin-bottom: 4px;">
                 End Date (Expiry)
               </div>
-              <div style="font-size: 15px; font-weight: 800; color: #dc2626;">
+              <div style="font-size: 14px; font-weight: 700; color: #b91c1c;">
                 ${item.endDate}
               </div>
             </td>
@@ -272,57 +291,57 @@ Recruitment & Hiring Portal Document System`;
         </table>
 
         <!-- Detailed Specifications Table -->
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; margin-bottom: 24px; font-size: 13px;">
-          <tr style="border-top: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
-            <td style="padding: 10px 12px; font-weight: 700; color: #64748b; background-color: #f8fafc; width: 35%;">Document Name</td>
-            <td style="padding: 10px 12px; color: #0f172a; font-weight: 700;">${item.name}</td>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; margin-bottom: 20px; font-size: 13px; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden;">
+          <tr style="border-bottom: 1px solid #e5e7eb;">
+            <td style="padding: 10px 12px; font-weight: 600; color: #4b5563; background-color: #f9fafb; width: 35%;">Document Name</td>
+            <td style="padding: 10px 12px; color: #111827; font-weight: 600;">${item.name}</td>
           </tr>
-          <tr style="border-bottom: 1px solid #f1f5f9;">
-            <td style="padding: 10px 12px; font-weight: 700; color: #64748b; background-color: #f8fafc;">Category</td>
-            <td style="padding: 10px 12px; color: #0f172a;">${item.category}</td>
+          <tr style="border-bottom: 1px solid #e5e7eb;">
+            <td style="padding: 10px 12px; font-weight: 600; color: #4b5563; background-color: #f9fafb;">Category</td>
+            <td style="padding: 10px 12px; color: #111827;">${item.category}</td>
           </tr>
           ${item.parentName ? `
-          <tr style="border-bottom: 1px solid #f1f5f9;">
-            <td style="padding: 10px 12px; font-weight: 700; color: #64748b; background-color: #f8fafc;">Folder Location</td>
-            <td style="padding: 10px 12px; color: #0f172a;">📁 ${item.parentName}</td>
+          <tr style="border-bottom: 1px solid #e5e7eb;">
+            <td style="padding: 10px 12px; font-weight: 600; color: #4b5563; background-color: #f9fafb;">Folder Location</td>
+            <td style="padding: 10px 12px; color: #111827;">📁 ${item.parentName}</td>
           </tr>` : ''}
-          <tr style="border-bottom: 1px solid #f1f5f9;">
-            <td style="padding: 10px 12px; font-weight: 700; color: #64748b; background-color: #f8fafc;">Validity Window</td>
-            <td style="padding: 10px 12px; color: #0f172a;">${item.startDate} &rarr; <span style="color: #dc2626; font-weight: 700;">${item.endDate}</span></td>
+          <tr style="border-bottom: 1px solid #e5e7eb;">
+            <td style="padding: 10px 12px; font-weight: 600; color: #4b5563; background-color: #f9fafb;">Validity Window</td>
+            <td style="padding: 10px 12px; color: #111827;">${item.startDate} &rarr; <span style="color: #b91c1c; font-weight: 600;">${item.endDate}</span></td>
           </tr>
           ${item.description ? `
-          <tr style="border-bottom: 1px solid #f1f5f9;">
-            <td style="padding: 10px 12px; font-weight: 700; color: #64748b; background-color: #f8fafc;">Description</td>
-            <td style="padding: 10px 12px; color: #0f172a;">${item.description}</td>
+          <tr style="border-bottom: 1px solid #e5e7eb;">
+            <td style="padding: 10px 12px; font-weight: 600; color: #4b5563; background-color: #f9fafb;">Description</td>
+            <td style="padding: 10px 12px; color: #374151;">${item.description}</td>
           </tr>` : ''}
           ${item.documentNames && item.documentNames.length > 0 ? `
-          <tr style="border-bottom: 1px solid #f1f5f9;">
-            <td style="padding: 10px 12px; font-weight: 700; color: #64748b; background-color: #f8fafc;">Attached Files</td>
-            <td style="padding: 10px 12px; color: #0f172a;">${item.documentNames.join(', ')}</td>
+          <tr>
+            <td style="padding: 10px 12px; font-weight: 600; color: #4b5563; background-color: #f9fafb;">Attached Files</td>
+            <td style="padding: 10px 12px; color: #111827;">${item.documentNames.join(', ')}</td>
           </tr>` : ''}
         </table>
 
-        <!-- Call To Action Button -->
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+        <!-- Simple, Professional Button -->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
           <tr>
             <td align="center">
-              <a href="http://localhost:5173/admin/documents" target="_blank" style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: #ffffff; font-size: 14px; font-weight: 800; text-decoration: none; padding: 14px 32px; border-radius: 12px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);">
+              <a href="http://localhost:5173/admin/documents" target="_blank" style="display: inline-block; background-color: #1e293b; color: #ffffff; font-size: 13px; font-weight: 600; text-decoration: none; padding: 12px 28px; border-radius: 6px;">
                 Open Document in Portal &rarr;
               </a>
             </td>
           </tr>
         </table>
 
-        <!-- Security / Renewal Note -->
-        <div style="background-color: #eff6ff; border-left: 3px solid #3b82f6; padding: 12px 16px; border-radius: 0 8px 8px 0; font-size: 12px; color: #1e40af; line-height: 1.5;">
-          <strong>Tip:</strong> If this document has already been renewed or extended, please update its <strong>End Date</strong> in the portal. The system will automatically update the notification tracking.
+        <!-- Simple Note (No loud colors) -->
+        <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; padding: 12px 14px; border-radius: 6px; font-size: 12px; color: #6b7280; line-height: 1.5;">
+          <strong>Note:</strong> Once an Administrator marks this document as <strong>"Closed"</strong> in the HR Portal, reminders for this document will stop.
         </div>
       </td>
     </tr>
 
-    <!-- Footer -->
+    <!-- Clean Simple Footer -->
     <tr>
-      <td style="background-color: #f8fafc; padding: 20px 28px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; line-height: 1.5;">
+      <td style="background-color: #f9fafb; padding: 16px 24px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 11px; color: #9ca3af; line-height: 1.5;">
         Recruitment &amp; Hiring Portal • Document Compliance Notification<br>
         &copy; ${new Date().getFullYear()} All rights reserved.
       </td>
@@ -332,7 +351,7 @@ Recruitment & Hiring Portal Document System`;
 </html>
 `;
 
-      // Send to all target recipients
+      // Send to recipients (bharill@kyotralis.com for testing)
       let docMailSentSuccessfully = false;
       for (const to of recipients) {
         try {
@@ -351,27 +370,34 @@ Recruitment & Hiring Portal Document System`;
       }
 
       if (!docMailSentSuccessfully) {
-        console.warn(`⚠️ [Document Expiry Notifier] Did NOT mark "${item.name}" as notified because email delivery failed. Will retry on next check.`);
+        console.warn(`⚠️ [Document Expiry Notifier] Did NOT mark "${item.name}" because email delivery failed. Will retry on next check.`);
         continue;
       }
 
-      // Mark the item as notified in Neo4j to prevent duplicate emails
+      // Update node in Neo4j with notification status and reminder tracking
       await session.run(`
         MATCH (f:DocumentFolder { id: $id })
         SET f.expiryNotificationSent = true,
-            f.expiryNotificationSentAt = datetime(),
+            f.expiryNotificationSentAt = coalesce(f.expiryNotificationSentAt, datetime()),
+            f.lastExpiryReminderDate = $todayStr,
+            f.lastExpiryReminderAt = datetime(),
+            f.reminderCount = coalesce(f.reminderCount, 0) + 1,
             f.updatedAt = datetime()
-      `, { id: item.id });
+      `, { id: item.id, todayStr: istTodayStr });
 
       sentCount++;
-      console.log(`📧 [Document Expiry Notifier] Sent 2-month expiry notification for "${item.name}" (expires ${item.endDate}) to: ${recipients.join(', ')}`);
+      console.log(`📧 [Document Expiry Notifier] Sent ${item.noticeType} notification for "${item.name}" (${item.diffDays} days remaining) to: ${recipients.join(', ')}`);
+
+      // Polite 300ms pause between separate document emails to avoid SMTP connection throttling
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
 
     return {
       checked: result.records.length,
-      expiring: expiringItems.length,
+      expiring: itemsToNotify.length,
       emailsSent: sentCount,
-      recipients: recipients
+      recipients: recipients,
+      isMonday: isMonday
     };
   } catch (err) {
     console.error('❌ [Document Expiry Notifier] Error during document expiry check:', err);
@@ -401,12 +427,32 @@ function startDocumentExpiryScheduler() {
 }
 
 /**
- * Sends a test/sample 2-month expiry notification email to verify SMTP and mailbox receipt.
+ * Sends a test/sample expiry notification email to verify SMTP and mailbox receipt.
  */
 async function sendSampleDocumentExpiryEmail(customRecipients = null) {
-  const recipients = customRecipients && customRecipients.length > 0 
-    ? customRecipients 
-    : ['bharathibharathi06733@gmail.com', 'bharill@kyotralis.com'];
+  let recipients = customRecipients && customRecipients.length > 0 ? customRecipients : [];
+
+  if (recipients.length === 0) {
+    const driver = getDriver();
+    const session = driver.session();
+    try {
+      const cfgResult = await session.run(`
+        MATCH (n:NotificationConfig { type: 'documentExpiry' })
+        RETURN n.emails AS emails
+      `);
+      if (cfgResult.records.length > 0) {
+        recipients = cfgResult.records[0].get('emails') || [];
+      }
+    } catch (e) {
+      console.warn('⚠️ Could not load DB recipients for sample email:', e.message);
+    } finally {
+      await session.close();
+    }
+  }
+
+  if (recipients.length === 0) {
+    recipients = ['swathi@uandwe.com', 'bharill@kyotralis.com', 'ravi@uandwe.com'];
+  }
 
   const sampleItem = {
     name: 'Sample NDA & Service Agreement (TEST)',
@@ -415,50 +461,50 @@ async function sendSampleDocumentExpiryEmail(customRecipients = null) {
     startDate: '2025-12-14',
     endDate: '2026-12-14',
     diffDays: 60,
-    description: 'This is a test notification verifying that the 2-month document expiration email system is working properly.',
+    description: 'This is a test notification verifying that the 60-day document expiration email system is working properly.',
     documentNames: ['Agreement_Signed.pdf', 'Terms_Schedule.docx']
   };
 
-  const subject = `[HR Portal] [TEST ALERT] Document Expiration Notice: "${sampleItem.name}" expires in 2 months (60 days)`;
+  const subject = `[HR Portal] [TEST ALERT] Document Expiration Notice: "${sampleItem.name}" (60 days remaining)`;
   const html = `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
       <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
-        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
-        .header { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); color: #ffffff; padding: 28px 24px; text-align: left; }
-        .header h1 { margin: 0 0 6px 0; font-size: 20px; font-weight: 700; }
-        .header p { margin: 0; font-size: 13px; color: #93c5fd; }
-        .badge { display: inline-block; background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 9999px; margin-bottom: 12px; border: 1px solid #fde68a; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 20px; color: #111827; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 10px; border: 1px solid #e5e7eb; overflow: hidden; }
+        .header { background: #1e293b; color: #ffffff; padding: 24px; text-align: left; }
+        .header h1 { margin: 0 0 4px 0; font-size: 18px; font-weight: 700; }
+        .header p { margin: 0; font-size: 13px; color: #cbd5e1; }
+        .badge { display: inline-block; background: #334155; color: #f8fafc; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px; margin-bottom: 10px; }
         .content { padding: 24px; }
-        .intro { font-size: 14px; line-height: 1.6; color: #334155; margin-bottom: 20px; }
-        .details-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 13px; }
-        .details-table td { padding: 12px 14px; border-bottom: 1px solid #f1f5f9; }
-        .details-table td.label { width: 35%; font-weight: 600; color: #64748b; background-color: #f8fafc; }
-        .details-table td.value { width: 65%; color: #0f172a; font-weight: 500; }
-        .highlight-expiry { color: #dc2626; font-weight: 700; }
-        .footer { background: #f8fafc; padding: 18px 24px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
+        .intro { font-size: 13.5px; line-height: 1.6; color: #374151; margin-bottom: 18px; }
+        .details-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+        .details-table td { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
+        .details-table td.label { width: 35%; font-weight: 600; color: #4b5563; background-color: #f9fafb; }
+        .details-table td.value { width: 65%; color: #111827; font-weight: 600; }
+        .highlight-expiry { color: #b91c1c; font-weight: 700; }
+        .footer { background: #f9fafb; padding: 16px 24px; text-align: center; font-size: 11px; color: #9ca3af; border-top: 1px solid #e5e7eb; }
       </style>
     </head>
     <body>
       <div class="container">
         <div class="header">
-          <span class="badge">⏰ 2 Months Expiry Notice (TEST)</span>
+          <span class="badge">EXPIRATION NOTICE (TEST)</span>
           <h1>Document Approaching End Date</h1>
-          <p>HR Portal Document Management System Alert</p>
+          <p>Document Compliance System</p>
         </div>
         <div class="content">
           <p class="intro">
             Hello Administrator,<br><br>
-            This is a <strong>test verification notification</strong> confirming that your automated 2-month document expiration mail alert system is active and sending correctly to <strong>${recipients.join(', ')}</strong>.
+            This is a <strong>test verification notification</strong> confirming that your automated document expiration mail alert system is active and sending correctly to <strong>${recipients.join(', ')}</strong>.
           </p>
 
           <table class="details-table">
             <tr>
               <td class="label">Document Name</td>
-              <td class="value"><strong>${sampleItem.name}</strong></td>
+              <td class="value">${sampleItem.name}</td>
             </tr>
             <tr>
               <td class="label">Category</td>
@@ -478,21 +524,21 @@ async function sendSampleDocumentExpiryEmail(customRecipients = null) {
             </tr>
             <tr>
               <td class="label">Description</td>
-              <td class="value">${sampleItem.description}</td>
+              <td class="value" style="font-weight: 400; color: #374151;">${sampleItem.description}</td>
             </tr>
             <tr>
               <td class="label">Attached Files</td>
-              <td class="value">${sampleItem.documentNames.join(', ')}</td>
+              <td class="value" style="font-weight: 400; color: #374151;">${sampleItem.documentNames.join(', ')}</td>
             </tr>
           </table>
 
-          <p style="font-size: 13px; color: #475569; line-height: 1.5;">
-            ✅ <strong>Status:</strong> Mail delivery configuration is working correctly!
-          </p>
+          <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; padding: 12px 14px; border-radius: 6px; font-size: 12px; color: #6b7280; line-height: 1.5;">
+            <strong>Status:</strong> Mail delivery configuration is working correctly.
+          </div>
         </div>
         <div class="footer">
-          This is an automated notification from the Recruitment & Hiring Portal Document System.<br>
-          © ${new Date().getFullYear()} HR Portal. All rights reserved.
+          Recruitment &amp; Hiring Portal • Document Compliance Notification<br>
+          &copy; ${new Date().getFullYear()} All rights reserved.
         </div>
       </div>
     </body>
