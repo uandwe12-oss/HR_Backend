@@ -232,15 +232,25 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       return res.status(400).json({ success: false, message: "Additional Reason cannot exceed 50 words." });
     }
 
-    // Holiday Check
+    // Holiday Check - Flexible matching for company/group
     const holidayResult = await session.run(`
-      MATCH (g:Group {name: $company})-[:HAS_HOLIDAY]->(h:Holiday)
-      WHERE h.date = $startDate OR h.date = $endDate
-      RETURN h.date as date
-    `, { company, startDate, endDate });
+      MATCH (g:Group)
+      WHERE toLower(g.name) = toLower($company)
+         OR replace(toLower(g.name), ' ', '') = replace(toLower($company), ' ', '')
+         OR (g.client IS NOT NULL AND toLower(g.client) = toLower($company))
+         OR (g.client IS NOT NULL AND replace(toLower(g.client), ' ', '') = replace(toLower($company), ' ', ''))
+         OR toLower(g.name) CONTAINS toLower($company)
+         OR toLower($company) CONTAINS toLower(g.name)
+         OR (g.client IS NOT NULL AND toLower($company) CONTAINS toLower(g.client))
+      OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
+      WITH DISTINCT linkedGroup
+      MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
+      RETURN DISTINCT h.date as date
+    `, { company });
     
-    if (holidayResult.records.length > 0) {
-      return res.status(400).json({ success: false, message: "It is a holiday. Leave cannot be applied on a holiday." });
+    const companyHolidays = holidayResult.records.map(r => r.get('date')).filter(Boolean);
+    if (companyHolidays.includes(startDate) || companyHolidays.includes(endDate)) {
+      return res.status(400).json({ success: false, message: "It is a holiday. Leave cannot start or end on a holiday." });
     }
 
     // Check existing leaves to ensure enough balance
@@ -299,7 +309,35 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       }
     }
 
-    const daysRequested = parseFloat(totalDays);
+    // Calculate actual working days excluding weekends and company holidays
+    let calculatedWorkingDays = 0;
+    try {
+      const [sY, sM, sD] = startDate.slice(0, 10).split('-').map(Number);
+      const [eY, eM, eD] = endDate.slice(0, 10).split('-').map(Number);
+      const d1 = new Date(sY, sM - 1, sD);
+      const d2 = new Date(eY, eM - 1, eD);
+      let cur = new Date(d1);
+      while (cur <= d2) {
+        const d = cur.getDay();
+        if (d !== 0 && d !== 6) {
+          const y = cur.getFullYear();
+          const m = String(cur.getMonth() + 1).padStart(2, '0');
+          const day = String(cur.getDate()).padStart(2, '0');
+          const dateStr = `${y}-${m}-${day}`;
+          if (!companyHolidays.includes(dateStr)) {
+            calculatedWorkingDays++;
+          }
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+    } catch (e) {
+      console.error("Error calculating working days:", e);
+      calculatedWorkingDays = parseFloat(totalDays) || 0;
+    }
+
+    const requestedTotal = parseFloat(totalDays);
+    const isHalfDay = startDate === endDate && requestedTotal === 0.5;
+    const daysRequested = isHalfDay ? 0.5 : (calculatedWorkingDays > 0 ? calculatedWorkingDays : (requestedTotal || 0));
     
     let annualLeaveDays = daysRequested;
     let lopDays = 0;
@@ -1032,12 +1070,13 @@ router.put("/adjust/:id", async (req, res) => {
       return res.status(400).json({ success: false, message: "Can only adjust approved leave requests" });
     }
 
+    const updateTotalDays = req.body.updateTotalDays === true || req.body.updateTotalDays === 'true';
     const totalDays = parseFloat(leave.totalDays);
-    if (parsedActualDays > totalDays) {
+    if (!updateTotalDays && parsedActualDays > totalDays) {
       return res.status(400).json({ success: false, message: "Actual used days cannot exceed originally approved days" });
     }
 
-    const restoredDays = totalDays - parsedActualDays;
+    const restoredDays = Math.max(0, totalDays - parsedActualDays);
     
     // Recalculate LOP vs Annual Leave
     let newLopDays = leave.lopDays || 0;
@@ -1071,6 +1110,7 @@ router.put("/adjust/:id", async (req, res) => {
     const updateResult = await session.run(`
       MATCH (l:LeaveRequest {id: $id})
       SET l.actualUsedDays = $actualUsedDays,
+          l.totalDays = CASE WHEN $updateTotalDays THEN $actualUsedDays ELSE l.totalDays END,
           l.restoredDays = $restoredDays,
           l.adjustedBy = $adjustedBy,
           l.adjustedAt = $adjustedAt,
@@ -1085,6 +1125,7 @@ router.put("/adjust/:id", async (req, res) => {
     `, {
       id,
       actualUsedDays: parsedActualDays,
+      updateTotalDays,
       restoredDays,
       adjustedBy: adjustedBy || 'Admin',
       adjustedAt: new Date().toISOString(),
