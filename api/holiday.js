@@ -38,21 +38,30 @@ router.get("/group/:groupName", async (req, res) => {
   const driver = getDriver();
   const session = driver.session();
   try {
+    const cleanGroupName = (groupName || "").trim();
     const result = await session.run(
-      `MATCH (g:Group)
-       WHERE toLower(g.name) = toLower($groupName)
-          OR replace(toLower(g.name), ' ', '') = replace(toLower($groupName), ' ', '')
-          OR (g.client IS NOT NULL AND toLower(g.client) = toLower($groupName))
-          OR (g.client IS NOT NULL AND replace(toLower(g.client), ' ', '') = replace(toLower($groupName), ' ', ''))
-          OR toLower(g.name) CONTAINS toLower($groupName)
-          OR toLower($groupName) CONTAINS toLower(g.name)
-          OR (g.client IS NOT NULL AND toLower($groupName) CONTAINS toLower(g.client))
-       OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
-       WITH DISTINCT linkedGroup
-       MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
-       RETURN DISTINCT h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type, h.notes AS notes
+      `MATCH (target:Group)
+       WHERE toLower(target.name) = toLower($groupName)
+          OR replace(toLower(target.name), ' ', '') = replace(toLower($groupName), ' ', '')
+          OR (target.client IS NOT NULL AND toLower(target.client) = toLower($groupName))
+          OR (target.client IS NOT NULL AND replace(toLower(target.client), ' ', '') = replace(toLower($groupName), ' ', ''))
+          OR toLower(target.name) CONTAINS toLower($groupName)
+          OR toLower($groupName) CONTAINS toLower(target.name)
+          OR (target.client IS NOT NULL AND toLower($groupName) CONTAINS toLower(target.client))
+       OPTIONAL MATCH (target)-[:SHARES_HOLIDAY_CALENDAR*1..5]-(linked:Group)
+       WITH collect(DISTINCT target) + collect(DISTINCT linked) AS allMatched
+       UNWIND allMatched AS item
+       WITH DISTINCT item WHERE item IS NOT NULL
+       OPTIONAL MATCH (variant:Group)
+       WHERE toLower(variant.name) = toLower(item.name)
+          OR replace(toLower(variant.name), ' ', '') = replace(toLower(item.name), ' ', '')
+       WITH collect(DISTINCT item) + collect(DISTINCT variant) AS allGroups
+       UNWIND allGroups AS finalGroup
+       WITH DISTINCT finalGroup WHERE finalGroup IS NOT NULL
+       MATCH (finalGroup)-[:HAS_HOLIDAY]->(h:Holiday)
+       RETURN DISTINCT h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type, h.notes AS notes, finalGroup.name AS groupName
        ORDER BY h.date`,
-      { groupName }
+      { groupName: cleanGroupName }
     );
     const holidays = result.records.map(record => ({
       id: record.get("id"),
@@ -60,7 +69,8 @@ router.get("/group/:groupName", async (req, res) => {
       date: record.get("date"),
       day: record.get("day"),
       type: record.get("type"),
-      notes: record.get("notes") || ""
+      notes: record.get("notes") || "",
+      groupName: record.get("groupName") || cleanGroupName
     }));
     res.json({ success: true, data: holidays });
   } catch (err) {
@@ -92,42 +102,46 @@ router.get("/companies", async (req, res) => {
       result = await session.run(`
         MATCH (g:Group)
         WHERE g.client = $client
-        OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linked:Group)
-        WITH g, collect(DISTINCT linked.name) AS sharedWith
+        OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR]->(linked:Group)
         RETURN DISTINCT 
           g.name AS name, 
           g.location AS location, 
           g.client AS client, 
           g.country AS country,
-          g.id AS id,
-          sharedWith
+          coalesce(g.id, g.name) AS id,
+          collect(DISTINCT linked.name) + [g.name] AS sharedWith
         ORDER BY g.name
       `, { client });
     } else {
       // Get all companies
       result = await session.run(`
         MATCH (g:Group)
-        OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linked:Group)
-        WITH g, collect(DISTINCT linked.name) AS sharedWith
+        OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR]->(linked:Group)
         RETURN DISTINCT 
           g.name AS name, 
           g.location AS location, 
           g.client AS client, 
           g.country AS country,
-          g.id AS id,
-          sharedWith
+          coalesce(g.id, g.name) AS id,
+          collect(DISTINCT linked.name) + [g.name] AS sharedWith
         ORDER BY g.name
       `);
     }
 
-    const companies = result.records.map(record => ({
-      name: record.get("name"),
-      location: record.get("location") || "",
-      client: record.get("client") || "",
-      country: record.get("country") || "",
-      id: record.get("id") || record.get("name"),
-      sharedWith: record.get("sharedWith") || []
-    }));
+    const companies = result.records.map(record => {
+      const rawShared = record.get("sharedWith") || [];
+      const sharedWith = Array.isArray(rawShared)
+        ? [...new Set(rawShared.filter(s => typeof s === 'string' && s.trim() !== ''))]
+        : [];
+      return {
+        name: record.get("name"),
+        location: record.get("location") || "",
+        client: record.get("client") || "",
+        country: record.get("country") || "",
+        id: record.get("id") || record.get("name"),
+        sharedWith: sharedWith
+      };
+    });
 
     // Ensure required companies are present for dropdown
     const requiredCompanies = ["BangaloreUANDWE", "BangaloreUANDWELabs"];
@@ -278,9 +292,17 @@ router.get("/upcoming", async (req, res) => {
             OR toLower(g.name) CONTAINS toLower($searchGroup)
             OR toLower($searchGroup) CONTAINS toLower(g.name)
             OR (g.client IS NOT NULL AND toLower($searchGroup) CONTAINS toLower(g.client))
-         OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
-         WITH DISTINCT linkedGroup
-         MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
+         OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*1..5]-(linkedGroup:Group)
+         WITH collect(DISTINCT g) + collect(DISTINCT linkedGroup) AS allMatched
+         UNWIND allMatched AS item
+         WITH DISTINCT item WHERE item IS NOT NULL
+         OPTIONAL MATCH (variant:Group)
+         WHERE toLower(variant.name) = toLower(item.name)
+            OR replace(toLower(variant.name), ' ', '') = replace(toLower(item.name), ' ', '')
+         WITH collect(DISTINCT item) + collect(DISTINCT variant) AS allGroups
+         UNWIND allGroups AS finalGroup
+         WITH DISTINCT finalGroup WHERE finalGroup IS NOT NULL
+         MATCH (finalGroup)-[:HAS_HOLIDAY]->(h:Holiday)
          WHERE h.date >= $today
          RETURN DISTINCT h.id AS id, h.name AS name, h.date AS date, h.day AS day, h.type AS type
          ORDER BY h.date LIMIT 10`,
@@ -502,24 +524,42 @@ router.post("/companies/share-holiday-calendar", async (req, res) => {
   try {
     const allToClear = [...new Set([...(previousCompanies || []), ...(newCompanies || [])])];
     
-    // Clear relationships for all involved nodes
+    // Clear relationships for all involved nodes (case-insensitively)
     if (allToClear.length > 0) {
       await session.run(`
         UNWIND $companies AS comp
-        MATCH (g:Group {name: comp})-[r:SHARES_HOLIDAY_CALENDAR]-()
+        MATCH (g:Group)
+        WHERE toLower(g.name) = toLower(comp) OR replace(toLower(g.name), ' ', '') = replace(toLower(comp), ' ', '')
+        OPTIONAL MATCH (g)-[r:SHARES_HOLIDAY_CALENDAR]-()
         DELETE r
       `, { companies: allToClear });
     }
     
-    // Create chain relationships for newCompanies
+    // Create bidirectional relationships for newCompanies (including case variants)
     if (newCompanies && newCompanies.length > 1) {
       for (let i = 0; i < newCompanies.length - 1; i++) {
         await session.run(`
           MERGE (g1:Group {name: $c1})
           MERGE (g2:Group {name: $c2})
           MERGE (g1)-[:SHARES_HOLIDAY_CALENDAR]->(g2)
+          MERGE (g2)-[:SHARES_HOLIDAY_CALENDAR]->(g1)
+          WITH g1, g2
+          OPTIONAL MATCH (allG1:Group) WHERE toLower(allG1.name) = toLower($c1) OR replace(toLower(allG1.name), ' ', '') = replace(toLower($c1), ' ', '')
+          OPTIONAL MATCH (allG2:Group) WHERE toLower(allG2.name) = toLower($c2) OR replace(toLower(allG2.name), ' ', '') = replace(toLower($c2), ' ', '')
+          FOREACH (_ IN CASE WHEN allG1 IS NOT NULL AND allG2 IS NOT NULL THEN [1] ELSE [] END |
+            MERGE (allG1)-[:SHARES_HOLIDAY_CALENDAR]->(allG2)
+            MERGE (allG2)-[:SHARES_HOLIDAY_CALENDAR]->(allG1)
+          )
         `, { c1: newCompanies[i], c2: newCompanies[i+1] });
       }
+
+      // Also automatically link any duplicate nodes with identical case-insensitive names
+      await session.run(`
+        MATCH (gA:Group), (gB:Group)
+        WHERE id(gA) < id(gB) AND (toLower(gA.name) = toLower(gB.name) OR replace(toLower(gA.name), ' ', '') = replace(toLower(gB.name), ' ', ''))
+        MERGE (gA)-[:SHARES_HOLIDAY_CALENDAR]->(gB)
+        MERGE (gB)-[:SHARES_HOLIDAY_CALENDAR]->(gA)
+      `);
     }
     
     res.json({ success: true, message: "Calendar sharing updated" });
