@@ -40,7 +40,7 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}, targetYear = n
     }
       
     if (leave.status === 'Approved') {
-      if (leave.leaveType === 'Work From Home') {
+      if (leave.leaveType === 'Work From Home' || leave.leaveType === 'WFH') {
         wfhUsed += days;
         if (isThisMonth) monthlyWFH += days;
       } else if (isThisYear) {
@@ -288,9 +288,10 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
 
     const normalizedCompany = (company || '').toLowerCase().replace(/\s+/g, '');
     const wfhEligibleCompanies = ['bangaloreuandwe', 'bangaloreuandwelabs', 'gurugramuandwe'];
+    const isWfhCompany = wfhEligibleCompanies.includes(normalizedCompany) || normalizedCompany.includes('uandwe');
     
     // WFH 1-per-week validation
-    if (leaveType === 'Work From Home' && wfhEligibleCompanies.includes(normalizedCompany)) {
+    if ((leaveType === 'Work From Home' || leaveType === 'WFH') && isWfhCompany) {
       const isSameWeek = (d1, d2) => {
         const date1 = new Date(d1); const date2 = new Date(d2);
         const day1 = date1.getDay() === 0 ? 7 : date1.getDay();
@@ -300,7 +301,7 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
         return date1.getTime() === date2.getTime();
       };
       const wfhThisWeek = existingLeaves.find(l => 
-        l.leaveType === 'Work From Home' && 
+        (l.leaveType === 'Work From Home' || l.leaveType === 'WFH') && 
         l.status !== 'Rejected' && 
         isSameWeek(startDate, l.startDate)
       );
