@@ -21,13 +21,20 @@ router.post("/", async (req, res) => {
   try {
     
     const result = await session.run(
-      `MATCH (u:User {username: $username}) 
+      `MATCH (u:User)
+       WHERE toLower(u.username) = toLower($username) OR toLower(u.email) = toLower($username)
        SET u.loginCount = coalesce(u.loginCount, 0) + 1
+       WITH u
+       OPTIONAL MATCH (p:PersonalDetails)
+       WHERE toLower(p.userId) = toLower(u.username) OR toLower(p.emailId) = toLower(u.username) OR (u.email IS NOT NULL AND toLower(p.emailId) = toLower(u.email))
        RETURN u.username AS username, 
               u.passwordHash AS hash, 
               u.role AS role,
-              u.name AS name,
-              u.assignedClient AS assignedClient,
+              coalesce(u.name, p.fullName, p.firstName + ' ' + p.lastName) AS name,
+              u.assignedCompany AS userAssignedCompany,
+              u.assignedClient AS userAssignedClient,
+              p.assignedCompany AS personalAssignedCompany,
+              p.assignedClient AS personalAssignedClient,
               u.loginCount AS loginCount`,
       { username }
     );
@@ -36,7 +43,7 @@ router.post("/", async (req, res) => {
     if (result.records.length === 0) {
       // console.log(`❌ Login failed: User ${username} not found`);
       return res.status(401).json({ 
-        success: false,
+        success: false, 
         message: "Invalid credentials" 
       });
     }
@@ -50,7 +57,7 @@ router.post("/", async (req, res) => {
 
     if (authMethod === 'SSO_ONLY') {
       return res.status(403).json({ 
-        success: false,
+        success: false, 
         message: "Username and password login is not available for your account. Please use Microsoft SSO to log in." 
       });
     }
@@ -63,7 +70,7 @@ router.post("/", async (req, res) => {
     if (!isValid) {
       console.log(`❌ Login failed: Invalid password for user ${username}`);
       return res.status(401).json({ 
-        success: false,
+        success: false, 
         message: "Invalid credentials" 
       });
     }
@@ -77,11 +84,31 @@ router.post("/", async (req, res) => {
     const loginCount = record.get("loginCount").toNumber ? record.get("loginCount").toNumber() : record.get("loginCount");
     const isFirstLogin = loginCount === 1;
 
+    const rawUserComp = record.get("userAssignedCompany");
+    const rawUserClient = record.get("userAssignedClient");
+    const rawPersComp = record.get("personalAssignedCompany");
+    const rawPersClient = record.get("personalAssignedClient");
+
+    const cleanVal = (val) => {
+      if (!val) return null;
+      if (Array.isArray(val)) {
+        const filtered = val.filter(x => typeof x === 'string' && x.trim() !== '');
+        return filtered.length > 0 ? (filtered.length === 1 ? filtered[0] : filtered) : null;
+      }
+      if (typeof val === 'string' && val.trim() !== '') return val.trim();
+      return null;
+    };
+
+    const assignedCompany = cleanVal(rawPersComp) || cleanVal(rawUserComp);
+    const assignedClient = cleanVal(rawUserClient) || cleanVal(rawPersClient) || null;
+
     const userObj = {
       username: record.get("username"),
       name: userName,
       role: record.get("role"),
-      clientName: record.get("assignedClient"),
+      assignedCompany: assignedCompany || null,
+      assignedClient: assignedClient || null,
+      clientName: assignedClient || null,
       isFirstLogin: isFirstLogin
     };
 
@@ -99,7 +126,7 @@ router.post("/", async (req, res) => {
   } catch (err) {
     console.error("❌ Login error:", err);
     res.status(500).json({ 
-      success: false,
+      success: false, 
       message: "Server error" 
     });
   } finally {
