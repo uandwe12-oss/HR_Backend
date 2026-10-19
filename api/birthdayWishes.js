@@ -1,7 +1,55 @@
 const express = require("express");
 const router = express.Router();
+const path = require("path");
+const fs = require("fs");
 const getDriver = require("../lib/neo4j");
 const { sendEmail } = require("../services/emailService");
+
+// ─── Resolve and Base64-encode uandwe Logo (Pure inline, NO attachments) ─────
+let cachedLogoBase64 = null;
+
+async function getLogoBase64() {
+  if (cachedLogoBase64) return cachedLogoBase64;
+
+  const candidatePaths = [
+    path.resolve(__dirname, "../../HR_Frontend/src/assets/Images/logo.webp"),
+    path.resolve(__dirname, "../assets/logo.png"),
+    path.resolve(__dirname, "../assets/logo.webp"),
+    path.resolve(__dirname, "../../HR_Frontend/public/logo.webp"),
+  ];
+
+  let foundPath = null;
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
+      foundPath = p;
+      break;
+    }
+  }
+
+  if (!foundPath) return "";
+
+  try {
+    const sharp = require("sharp");
+    const pngBuf = await sharp(foundPath)
+      .resize(140, 140)
+      .png({ quality: 90 })
+      .toBuffer();
+    cachedLogoBase64 = `data:image/png;base64,${pngBuf.toString("base64")}`;
+    return cachedLogoBase64;
+  } catch (err) {
+    try {
+      const buf = fs.readFileSync(foundPath);
+      const mime = foundPath.endsWith(".png") ? "image/png" : "image/webp";
+      cachedLogoBase64 = `data:${mime};base64,${buf.toString("base64")}`;
+      return cachedLogoBase64;
+    } catch (_) {
+      return "";
+    }
+  }
+}
+
+// Pre-cache on startup
+getLogoBase64().catch(() => {});
 
 // ─── Birthday Email Templates ───────────────────────────────────────────────
 const TEMPLATES = {
@@ -26,8 +74,8 @@ const TEMPLATES = {
   },
 };
 
-// ─── Build professional HTML email ──────────────────────────────────────────
-function buildHtmlEmail(employeeName, messageText) {
+// ─── Build professional HTML email with uandwe Logo directly in HTML ─────────
+function buildHtmlEmail(employeeName, messageText, logoBase64 = "") {
   // Convert newlines to <br> for HTML rendering
   const htmlMessage = messageText.replace(/\n/g, "<br>");
 
@@ -38,31 +86,56 @@ function buildHtmlEmail(employeeName, messageText) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
   </head>
-  <body style="margin:0; padding:0; background-color:#f4f6f9; font-family: 'Segoe UI', Arial, sans-serif;">
-    <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f6f9; padding:40px 20px;">
+  <body style="margin:0; padding:0; background-color:#f4f6f9; font-family:'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f6f9; padding:40px 20px;">
       <tr>
         <td align="center">
-          <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 2px 12px rgba(0,0,0,0.08);">
-            <!-- Header -->
+          <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.07); border:1px solid #e2e8f0;">
+            <!-- Header Section with uandwe Logo, Cake Emoji, and Title -->
             <tr>
-              <td style="background: linear-gradient(135deg, #3b82f6, #6366f1); padding:32px 40px; text-align:center;">
-                <div style="font-size:48px; margin-bottom:12px;">🎂</div>
-                <h1 style="color:#ffffff; font-size:28px; margin:0; font-weight:700;">Happy Birthday!</h1>
-                <p style="color:rgba(255,255,255,0.85); font-size:16px; margin:8px 0 0;">${employeeName}</p>
+              <td align="center" style="background-color:#ffffff; padding:40px 40px 20px; text-align:center;">
+                <!-- uandwe Brand Logo directly at the top -->
+                <table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 16px;">
+                  <tr>
+                    <td align="center" bgcolor="#f26522" style="background-color:#f26522; width:68px; height:68px; border-radius:16px; text-align:center; vertical-align:middle; padding:0; overflow:hidden;">
+                      ${logoBase64 ? `
+                        <img src="${logoBase64}" alt="uandwe" width="68" height="68" style="display:block; width:68px; height:68px; border-radius:16px; border:0; outline:none; text-decoration:none;" />
+                      ` : `
+                        <span style="color:#ffffff; font-size:16px; font-weight:800; font-family:'Segoe UI', Arial, sans-serif; letter-spacing:-0.5px;">uandwe</span>
+                      `}
+                    </td>
+                  </tr>
+                </table>
+                <!-- Cake Emoji -->
+                <div style="font-size:46px; line-height:1; margin-bottom:12px;">🎂</div>
+                <!-- Happy Birthday Title (High contrast, Outlook compatible) -->
+                <h1 style="color:#1e3a8a; font-size:28px; font-weight:800; margin:0 0 6px; letter-spacing:-0.5px; font-family:'Segoe UI', Arial, sans-serif;">
+                  Happy Birthday
+                </h1>
+                ${employeeName ? `
+                <p style="color:#334155; font-size:17px; font-weight:600; margin:0 0 16px; font-family:'Segoe UI', Arial, sans-serif;">
+                  ${employeeName}
+                </p>
+                ` : ''}
+                <!-- Accent Line -->
+                <div style="width:48px; height:3px; background-color:#f26522; border-radius:2px; margin:8px auto 0;"></div>
               </td>
             </tr>
-            <!-- Body -->
+            <!-- Message Body -->
             <tr>
-              <td style="padding:32px 40px;">
-                <p style="color:#334155; font-size:15px; line-height:1.7; margin:0;">
+              <td style="padding:28px 44px 34px;">
+                <div style="color:#334155; font-size:15px; line-height:1.75; font-family:'Segoe UI', Arial, sans-serif;">
                   ${htmlMessage}
-                </p>
+                </div>
               </td>
             </tr>
             <!-- Footer -->
             <tr>
-              <td style="padding:20px 40px 28px; border-top:1px solid #e2e8f0;">
-                <p style="color:#94a3b8; font-size:12px; margin:0; text-align:center;">
+              <td style="padding:20px 40px 26px; border-top:1px solid #f1f5f9; background-color:#fafafa; text-align:center;">
+                <p style="color:#64748b; font-size:12px; margin:0 0 4px; font-weight:600; font-family:'Segoe UI', Arial, sans-serif;">
+                  uandwe • Human Resources
+                </p>
+                <p style="color:#94a3b8; font-size:11px; margin:0; font-family:'Segoe UI', Arial, sans-serif;">
                   Sent via HR Portal &bull; Birthday Wishes System
                 </p>
               </td>
@@ -85,6 +158,8 @@ router.post("/send-wishes", async (req, res) => {
   try {
     const {
       birthdayEmployeeId,
+      birthdayEmployeeEmail,
+      birthdayEmployeeName,
       template,
       subject,
       message,
@@ -97,34 +172,75 @@ router.post("/send-wishes", async (req, res) => {
       sentBy = "Admin",
     } = req.body;
 
-    console.log(`\n📡 POST /api/birthday/send-wishes for employee: ${birthdayEmployeeId}`);
+    console.log(`\n📡 POST /api/birthday/send-wishes for employee: ${birthdayEmployeeName || birthdayEmployeeEmail || birthdayEmployeeId}`);
 
     // ── Validate required fields ──
-    if (!birthdayEmployeeId || !subject || !message) {
+    if ((!birthdayEmployeeId && !birthdayEmployeeEmail && !birthdayEmployeeName) || !subject || !message) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: birthdayEmployeeId, subject, message",
+        message: "Missing required fields: employee identifier, subject, message",
       });
     }
 
-    // ── Fetch birthday employee details ──
-    const empResult = await session.run(
-      `MATCH (p:PersonalDetails {employeeNumber: $empId})
-       RETURN p.fullName AS fullName, p.emailId AS emailId, p.supervisor AS supervisor, p.employeeNumber AS employeeNumber`,
-      { empId: birthdayEmployeeId }
-    );
+    // ── Fetch birthday employee details (prioritize unique email, then employeeNumber, then fullName) ──
+    let empRecord = null;
+    let employeeName = (birthdayEmployeeName || "").trim();
+    let employeeEmail = (birthdayEmployeeEmail || "").trim();
+    let supervisorName = null;
 
-    if (empResult.records.length === 0) {
+    if (birthdayEmployeeEmail && String(birthdayEmployeeEmail).trim() !== '') {
+      const emailResult = await session.run(
+        `MATCH (p:PersonalDetails)
+         WHERE toLower(p.emailId) = toLower($email)
+         RETURN p.fullName AS fullName, p.emailId AS emailId, p.supervisor AS supervisor, p.employeeNumber AS employeeNumber
+         LIMIT 1`,
+        { email: String(birthdayEmployeeEmail).trim() }
+      );
+      if (emailResult.records.length > 0) {
+        empRecord = emailResult.records[0];
+      }
+    }
+
+    if (!empRecord && birthdayEmployeeId && String(birthdayEmployeeId).trim() !== '' && String(birthdayEmployeeId).trim() !== 'null' && String(birthdayEmployeeId).trim() !== 'undefined' && String(birthdayEmployeeId).trim() !== 'N/A') {
+      const idResult = await session.run(
+        `MATCH (p:PersonalDetails)
+         WHERE (p.employeeNumber = $empId OR toLower(p.userId) = toLower($empId))
+         RETURN p.fullName AS fullName, p.emailId AS emailId, p.supervisor AS supervisor, p.employeeNumber AS employeeNumber
+         LIMIT 1`,
+        { empId: String(birthdayEmployeeId).trim() }
+      );
+      if (idResult.records.length > 0) {
+        empRecord = idResult.records[0];
+      }
+    }
+
+    if (!empRecord && birthdayEmployeeName && String(birthdayEmployeeName).trim() !== '') {
+      const nameResult = await session.run(
+        `MATCH (p:PersonalDetails)
+         WHERE toLower(p.fullName) = toLower($name)
+         RETURN p.fullName AS fullName, p.emailId AS emailId, p.supervisor AS supervisor, p.employeeNumber AS employeeNumber
+         LIMIT 1`,
+        { name: String(birthdayEmployeeName).trim() }
+      );
+      if (nameResult.records.length > 0) {
+        empRecord = nameResult.records[0];
+      }
+    }
+
+    if (empRecord) {
+      if (!employeeName) {
+        employeeName = empRecord.get("fullName") || "";
+      }
+      if (!employeeEmail) {
+        employeeEmail = empRecord.get("emailId") || "";
+      }
+      supervisorName = empRecord.get("supervisor");
+    } else if (!employeeEmail && !employeeName) {
       return res.status(404).json({
         success: false,
         message: "Birthday employee not found",
       });
     }
-
-    const empRecord = empResult.records[0];
-    const employeeName = empRecord.get("fullName");
-    const employeeEmail = empRecord.get("emailId");
-    const supervisorName = empRecord.get("supervisor");
 
     // ── Build recipient lists ──
     const toList = [];
@@ -191,10 +307,11 @@ router.post("/send-wishes", async (req, res) => {
       if (fallback) toList.push(fallback);
     }
 
-    // ── Build HTML email ──
-    const htmlContent = buildHtmlEmail(employeeName, message);
+    // ── Build HTML email with inline base64 logo (NO attachments array!) ──
+    const logoDataUrl = await getLogoBase64();
+    const htmlContent = buildHtmlEmail(employeeName, message, logoDataUrl);
 
-    // ── Send email ──
+    // ── Send email (Pure inline HTML - NO attachments to prevent Outlook download box) ──
     const emailResult = await sendEmail({
       to: toList.join(", "),
       cc: ccList.length > 0 ? ccList.join(", ") : undefined,
