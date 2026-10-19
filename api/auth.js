@@ -10,7 +10,7 @@ const crypto = require("crypto");
 // ==========================================
 // Constants
 // ==========================================
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173/myuandwe";
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
 
 // ==========================================
 // Microsoft MSAL Configuration
