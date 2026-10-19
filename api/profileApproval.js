@@ -222,9 +222,12 @@ router.put("/admin/approve/:userId", async (req, res) => {
     }
 
     await session.run(
-      `MATCH (u:User {username: $userId})
-       SET u.profileStatus = 'APPROVED'`,
-      { userId }
+      `MATCH (u:User)
+       WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
+       SET u.profileStatus = 'APPROVED',
+           u.assignedCompany = $assignedCompany,
+           u.assignedClient = $assignedCompany`,
+      { userId, assignedCompany: cleanedProfile.assignedCompany || "" }
     );
 
     // Create notification for the user
