@@ -43,11 +43,7 @@ router.get("/group/:groupName", async (req, res) => {
       `MATCH (target:Group)
        WHERE toLower(target.name) = toLower($groupName)
           OR replace(toLower(target.name), ' ', '') = replace(toLower($groupName), ' ', '')
-          OR (target.client IS NOT NULL AND toLower(target.client) = toLower($groupName))
-          OR (target.client IS NOT NULL AND replace(toLower(target.client), ' ', '') = replace(toLower($groupName), ' ', ''))
-          OR toLower(target.name) CONTAINS toLower($groupName)
-          OR toLower($groupName) CONTAINS toLower(target.name)
-          OR (target.client IS NOT NULL AND toLower($groupName) CONTAINS toLower(target.client))
+          OR (target.client IS NOT NULL AND (toLower(target.client) = toLower($groupName) OR replace(toLower(target.client), ' ', '') = replace(toLower($groupName), ' ', '')))
        OPTIONAL MATCH (target)-[:SHARES_HOLIDAY_CALENDAR*1..5]-(linked:Group)
        WITH collect(DISTINCT target) + collect(DISTINCT linked) AS allMatched
        UNWIND allMatched AS item
@@ -287,11 +283,7 @@ router.get("/upcoming", async (req, res) => {
         `MATCH (g:Group)
          WHERE toLower(g.name) = toLower($searchGroup)
             OR replace(toLower(g.name), ' ', '') = replace(toLower($searchGroup), ' ', '')
-            OR (g.client IS NOT NULL AND toLower(g.client) = toLower($searchGroup))
-            OR (g.client IS NOT NULL AND replace(toLower(g.client), ' ', '') = replace(toLower($searchGroup), ' ', ''))
-            OR toLower(g.name) CONTAINS toLower($searchGroup)
-            OR toLower($searchGroup) CONTAINS toLower(g.name)
-            OR (g.client IS NOT NULL AND toLower($searchGroup) CONTAINS toLower(g.client))
+            OR (g.client IS NOT NULL AND (toLower(g.client) = toLower($searchGroup) OR replace(toLower(g.client), ' ', '') = replace(toLower($searchGroup), ' ', '')))
          OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*1..5]-(linkedGroup:Group)
          WITH collect(DISTINCT g) + collect(DISTINCT linkedGroup) AS allMatched
          UNWIND allMatched AS item
