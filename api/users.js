@@ -22,48 +22,90 @@ router.get("/", async (req, res) => {
     // console.log("🔍 Executing Neo4j query...");
     
     const result = await session.run(
-      `CALL {
-         MATCH (u:User)
-         OPTIONAL MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower(u.username)
-         RETURN u.username as username,
-                COALESCE(p.firstName + ' ' + p.lastName, p.fullName, u.name) as name,
-                u.role as role,
-                u.assignedClient as assignedClient,
-                p.assignedCompany as assignedCompany,
-                p.nationality as nationality,
-                COALESCE(p.employeeNumber, u.pid) as pid,
-                u.createdAt as createdAt,
-                p.profileStatus as approvalStatus
-         UNION
-         MATCH (p:PersonalDetails)
-         WHERE NOT EXISTS { MATCH (u2:User) WHERE toLower(u2.username) = toLower(p.userId) }
-         RETURN p.userId as username,
-                COALESCE(p.firstName + ' ' + p.lastName, p.fullName) as name,
-                'Employee' as role,
-                null as assignedClient,
-                p.assignedCompany as assignedCompany,
-                p.nationality as nationality,
-                p.employeeNumber as pid,
-                p.createdAt as createdAt,
-                p.profileStatus as approvalStatus
-       }
-       RETURN username, name, role, assignedClient, assignedCompany, nationality, pid, createdAt, approvalStatus
-       ORDER BY createdAt DESC`
+      `MATCH (u:User)
+       OPTIONAL MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower(u.username)
+       RETURN u.username as username,
+              COALESCE(p.firstName + ' ' + p.lastName, p.fullName, u.name) as name,
+              COALESCE(u.role, 'Employee') as role,
+              u.assignedClient as userAssignedClient,
+              u.assignedCompany as userAssignedCompany,
+              p.assignedCompany as personalAssignedCompany,
+              p.assignedClient as personalAssignedClient,
+              p.nationality as nationality,
+              COALESCE(p.employeeNumber, u.pid) as pid,
+              u.createdAt as createdAt,
+              p.profileStatus as approvalStatus
+       ORDER BY u.createdAt DESC`
     );
-
-    // console.log(`📊 Found ${result.records.length} users`);
 
     const users = result.records.map(record => {
       const username = record.get("username");
       const name = record.get("name");
       const role = record.get("role");
-      const assignedClient = record.get("assignedClient");
-      const pid = record.get("pid"); // This will be null initially
+      const rawUserClient = record.get("userAssignedClient");
+      const rawUserComp = record.get("userAssignedCompany");
+      const rawPersComp = record.get("personalAssignedCompany");
+      const rawPersClient = record.get("personalAssignedClient");
+      const pid = record.get("pid");
       const createdAt = record.get("createdAt");
       const approvalStatus = record.get("approvalStatus");
-      const assignedCompany = record.get("assignedCompany");
       const nationality = record.get("nationality");
-      
+
+      const cleanVal = (val) => {
+        if (!val) return null;
+        if (Array.isArray(val)) {
+          const filtered = val.filter(x => typeof x === 'string' && x.trim() !== '');
+          return filtered.length > 0 ? (filtered.length === 1 ? filtered[0] : filtered) : null;
+        }
+        if (typeof val === 'string' && val.trim() !== '') return val.trim();
+        return null;
+      };
+
+      const assignedCompany = cleanVal(rawPersComp) || cleanVal(rawUserComp) || null;
+      const rawClient = cleanVal(rawUserClient) || cleanVal(rawPersClient) || null;
+
+      const CLIENT_ROLES = ["Interviewer", "Client Interviewer", "Sales", "Recruiter"];
+      const rolesArray = Array.isArray(role) ? role : [role];
+      const hasClientRole = rolesArray.some(r => CLIENT_ROLES.includes(r));
+
+      const isCompanyVal = (val) => {
+        if (!val || typeof val !== 'string') return false;
+        const s = val.trim().toLowerCase();
+        return (
+          s.startsWith('bangalore') ||
+          s.startsWith('shanghai') ||
+          s.includes('uandwe') ||
+          s.includes('microchip') ||
+          s === (assignedCompany || '').trim().toLowerCase()
+        );
+      };
+
+      let assignedClient = null;
+      if (hasClientRole && rawClient) {
+        if (Array.isArray(rawClient)) {
+          const filtered = rawClient.filter(c => !isCompanyVal(c));
+          assignedClient = filtered.length > 0 ? filtered : null;
+        } else if (!isCompanyVal(rawClient)) {
+          assignedClient = rawClient;
+        }
+      }
+
+      let formattedCreatedAt = null;
+      if (createdAt) {
+        if (typeof createdAt === 'string') {
+          formattedCreatedAt = createdAt;
+        } else if (typeof createdAt === 'object' && typeof createdAt.toString === 'function') {
+          formattedCreatedAt = createdAt.toString();
+        } else {
+          try {
+            const d = new Date(createdAt);
+            formattedCreatedAt = isNaN(d.getTime()) ? null : d.toISOString();
+          } catch (e) {
+            formattedCreatedAt = null;
+          }
+        }
+      }
+
       return {
         username: username,
         name: name || null,
@@ -71,8 +113,8 @@ router.get("/", async (req, res) => {
         assignedClient: assignedClient || null,
         assignedCompany: assignedCompany || null,
         nationality: nationality || null,
-        pid: pid || null, // Return null if no PID exists
-        createdAt: createdAt ? new Date(createdAt).toISOString() : null,
+        pid: pid || null,
+        createdAt: formattedCreatedAt,
         approvalStatus: approvalStatus || "PENDING"
       };
     });
@@ -148,10 +190,16 @@ router.post("/", async (req, res) => {
 
     // Role-specific validation
     const needsClient = roles.some(r => ["Interviewer", "Client Interviewer", "Sales"].includes(r));
-    if (needsClient && !assignedClient) {
+    const clientList = Array.isArray(assignedClient)
+      ? assignedClient.filter(c => typeof c === 'string' && c.trim() !== '').map(c => c.trim())
+      : (assignedClient && typeof assignedClient === 'string' && assignedClient.trim() !== ''
+          ? assignedClient.split(',').map(s => s.trim()).filter(Boolean)
+          : []);
+
+    if (needsClient && clientList.length === 0) {
       return res.status(400).json({
         success: false,
-        message: `Selected role(s) require an assigned client. Please select a client.`
+        message: `Selected role(s) require an assigned client. Please select at least one client.`
       });
     }
 
@@ -160,7 +208,7 @@ router.post("/", async (req, res) => {
       username,
       passwordHash,
       role: roles,
-      assignedClient: needsClient ? (assignedClient || null) : null,
+      assignedClient: needsClient ? (clientList.length > 0 ? clientList : null) : null,
       createdAt: new Date().toISOString()
     };
 
@@ -253,15 +301,20 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Find user with all fields
+    // Find user with all fields, falling back to PersonalDetails if needed
     const result = await session.run(
-      `MATCH (u:User {username: $username})
+      `MATCH (u:User)
+       WHERE toLower(u.username) = toLower($username)
+       OPTIONAL MATCH (p:PersonalDetails)
+       WHERE toLower(p.userId) = toLower($username) OR toLower(p.emailId) = toLower($username)
        RETURN u.username as username,
               u.passwordHash as passwordHash,
               u.role as role,
-              u.assignedClient as assignedClient,
-              u.assignedCompany as assignedCompany,
-              u.pid as pid,
+              u.assignedClient as userAssignedClient,
+              u.assignedCompany as userAssignedCompany,
+              p.assignedCompany as personalAssignedCompany,
+              p.assignedClient as personalAssignedClient,
+              coalesce(u.pid, p.employeeNumber) as pid,
               u.createdAt as createdAt`,
       { username }
     );
@@ -277,10 +330,52 @@ router.post("/login", async (req, res) => {
     const user = result.records[0];
     const passwordHash = user.get("passwordHash");
     const role = user.get("role");
-    const assignedClient = user.get("assignedClient");
-    const assignedCompany = user.get("assignedCompany");
-    const pid = user.get("pid"); // This will be null if not set yet
+    const pid = user.get("pid");
     const createdAt = user.get("createdAt");
+
+    const rawUserClient = user.get("userAssignedClient");
+    const rawUserComp = user.get("userAssignedCompany");
+    const rawPersComp = user.get("personalAssignedCompany");
+    const rawPersClient = user.get("personalAssignedClient");
+
+    const cleanVal = (val) => {
+      if (!val) return null;
+      if (Array.isArray(val)) {
+        const filtered = val.filter(x => typeof x === 'string' && x.trim() !== '');
+        return filtered.length > 0 ? (filtered.length === 1 ? filtered[0] : filtered) : null;
+      }
+      if (typeof val === 'string' && val.trim() !== '') return val.trim();
+      return null;
+    };
+
+    const assignedCompany = cleanVal(rawPersComp) || cleanVal(rawUserComp) || null;
+    const rawClient = cleanVal(rawUserClient) || cleanVal(rawPersClient) || null;
+
+    const CLIENT_ROLES = ["Interviewer", "Client Interviewer", "Sales", "Recruiter"];
+    const rolesArray = Array.isArray(role) ? role : [role];
+    const hasClientRole = rolesArray.some(r => CLIENT_ROLES.includes(r));
+
+    const isCompanyVal = (val) => {
+      if (!val || typeof val !== 'string') return false;
+      const s = val.trim().toLowerCase();
+      return (
+        s.startsWith('bangalore') ||
+        s.startsWith('shanghai') ||
+        s.includes('uandwe') ||
+        s.includes('microchip') ||
+        s === (assignedCompany || '').trim().toLowerCase()
+      );
+    };
+
+    let assignedClient = null;
+    if (hasClientRole && rawClient) {
+      if (Array.isArray(rawClient)) {
+        const filtered = rawClient.filter(c => !isCompanyVal(c));
+        assignedClient = filtered.length > 0 ? filtered : null;
+      } else if (!isCompanyVal(rawClient)) {
+        assignedClient = rawClient;
+      }
+    }
 
     // Verify password
     const isValidPassword = await bcrypt.compare(password, passwordHash);
@@ -292,11 +387,6 @@ router.post("/login", async (req, res) => {
         message: "Invalid username or password"
       });
     }
-
-    // console.log(`✅ User logged in successfully: ${username} (${role})`);
-    // console.log(`   PID: ${pid || "Not assigned yet (will be created when you submit personal details)"}`);
-    if (assignedClient) console.log(`   Assigned client: ${assignedClient}`);
-    if (assignedCompany) console.log(`   Assigned company: ${assignedCompany}`);
 
     // Return user data (without password)
     res.json({
@@ -455,12 +545,17 @@ router.put("/:username", async (req, res) => {
     }
 
     const needsClient = roles.some(r => ["Interviewer", "Client Interviewer", "Sales"].includes(r));
+    const clientList = Array.isArray(assignedClient)
+      ? assignedClient.filter(c => typeof c === 'string' && c.trim() !== '').map(c => c.trim())
+      : (assignedClient && typeof assignedClient === 'string' && assignedClient.trim() !== ''
+          ? assignedClient.split(',').map(s => s.trim()).filter(Boolean)
+          : []);
 
     // Role-specific validation
-    if (needsClient && !assignedClient) {
+    if (needsClient && clientList.length === 0) {
       return res.status(400).json({
         success: false,
-        message: `Selected role(s) require an assigned client.`
+        message: `Selected role(s) require an assigned client. Please select at least one client.`
       });
     }
 
@@ -484,24 +579,48 @@ router.put("/:username", async (req, res) => {
 
     // Handle assignedClient for Interviewer, Client Interviewer, and Sales
     if (needsClient) {
-      if (assignedClient) {
+      if (clientList.length > 0) {
         updateQuery += `, u.assignedClient = $assignedClient`;
-        params.assignedClient = assignedClient;
-        console.log(`   Setting assigned client: ${assignedClient}`);
+        params.assignedClient = clientList;
       } else {
         updateQuery += `, u.assignedClient = null`;
-        console.log(`   Setting assigned client to null`);
       }
-      // Remove assignedCompany if it exists
-      updateQuery += ` REMOVE u.assignedCompany`;
-    } 
-    // Handle roles that don't need assigned fields
-    else {
-      updateQuery += ` REMOVE u.assignedClient, u.assignedCompany`;
+    } else if (assignedClient !== undefined) {
+      if (clientList.length > 0) {
+        updateQuery += `, u.assignedClient = $assignedClient`;
+        params.assignedClient = clientList;
+      }
+    }
+
+    // Handle assignedCompany if provided without wiping existing values
+    if (assignedCompany !== undefined) {
+      if (assignedCompany && typeof assignedCompany === 'string' && assignedCompany.trim() !== '') {
+        updateQuery += `, u.assignedCompany = $assignedCompany`;
+        params.assignedCompany = assignedCompany.trim();
+        if (!needsClient && (!assignedClient || clientList.length === 0)) {
+          updateQuery += `, u.assignedClient = $assignedCompany`;
+        }
+      } else if (assignedCompany === null || assignedCompany === '') {
+        updateQuery += ` REMOVE u.assignedCompany`;
+      }
     }
     
     // Execute update
     await session.run(updateQuery, params);
+
+    // Sync assignedCompany to PersonalDetails node if updated
+    if (params.assignedCompany) {
+      try {
+        await session.run(
+          `MATCH (p:PersonalDetails)
+           WHERE toLower(p.userId) = toLower($username) OR toLower(p.emailId) = toLower($username)
+           SET p.assignedCompany = $assignedCompany, p.assignedClient = $assignedCompany`,
+          { username, assignedCompany: params.assignedCompany }
+        );
+      } catch (pErr) {
+        console.error("Error syncing assignedCompany to PersonalDetails:", pErr);
+      }
+    }
     
     // Fetch updated user data
     const result = await session.run(
