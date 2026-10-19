@@ -1138,8 +1138,7 @@ router.post("/", (req, res, next) => {
       `MATCH (u:User)
        WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
        SET u.pid = $pid,
-           u.assignedCompany = coalesce($assignedCompany, u.assignedCompany),
-           u.assignedClient = coalesce($assignedCompany, u.assignedClient)`,
+           u.assignedCompany = coalesce($assignedCompany, u.assignedCompany)`,
       { userId, pid: pidToUse, assignedCompany: assignedCompany || null }
     );
 
