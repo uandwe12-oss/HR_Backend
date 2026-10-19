@@ -42,11 +42,12 @@ router.get("/admin/profiles", async (req, res) => {
 
     let query = `
       MATCH (p:PersonalDetails)
-      OPTIONAL MATCH (u:User {username: p.userId})
+      OPTIONAL MATCH (u:User) WHERE toLower(u.username) = toLower(p.userId) OR toLower(u.email) = toLower(p.userId)
       RETURN 
         p {.*} as personalDetails,
         u.role as role,
-        u.department as department
+        u.department as department,
+        u.profileStatus as userProfileStatus
       ORDER BY p.createdAt DESC
     `;
 
@@ -55,21 +56,25 @@ router.get("/admin/profiles", async (req, res) => {
     if (status && status !== 'ALL') {
       query = `
         MATCH (p:PersonalDetails)
-        WHERE p.profileStatus = $status
-        OPTIONAL MATCH (u:User {username: p.userId})
+        OPTIONAL MATCH (u:User) WHERE toLower(u.username) = toLower(p.userId) OR toLower(u.email) = toLower(p.userId)
+        WITH p, u, toUpper(COALESCE(p.profileStatus, u.profileStatus, 'PENDING')) as effectiveStatus
+        WHERE effectiveStatus = $status
         RETURN 
           p {.*} as personalDetails,
           u.role as role,
-          u.department as department
+          u.department as department,
+          u.profileStatus as userProfileStatus
         ORDER BY p.createdAt DESC
       `;
-      params.status = status;
+      params.status = status.toUpperCase();
     }
 
     const result = await session.run(query, params);
 
     const profiles = result.records.map(record => {
       const p = record.get("personalDetails") || {};
+      const userProfileStatus = record.get("userProfileStatus");
+      const effectiveStatus = (p.profileStatus || userProfileStatus || "PENDING").toUpperCase();
       return {
         ...p,
         userId: p.userId,
@@ -80,7 +85,8 @@ router.get("/admin/profiles", async (req, res) => {
         mobileNumber: p.mobileNumber,
         pid: p.pid,
         submissionDate: p.createdAt,
-        approvalStatus: p.profileStatus || "PENDING",
+        approvalStatus: effectiveStatus,
+        profileStatus: effectiveStatus,
         rejectionReason: p.profileRejectionReason || "",
         deactivationReason: p.profileDeactivationReason || "",
         submittedAt: p.profileSubmittedAt,
@@ -113,14 +119,16 @@ router.get("/admin/profile/:userId", async (req, res) => {
 
   try {
     const result = await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId})
-       OPTIONAL MATCH (u:User {username: $userId})
+      `MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower($userId)
+       OPTIONAL MATCH (u:User) WHERE toLower(u.username) = toLower(p.userId) OR toLower(u.email) = toLower(p.userId)
        RETURN 
          p {.*} as personalDetails,
-         p.profileStatus as approvalStatus,
+         toUpper(COALESCE(p.profileStatus, u.profileStatus, 'PENDING')) as approvalStatus,
          p.profileRejectionReason as rejectionReason,
+         p.profileDeactivationReason as deactivationReason,
          p.profileSubmittedAt as submittedAt,
          p.profileApprovedAt as approvedAt,
+         p.profileDeactivatedAt as deactivatedAt,
          u.role as role,
          u.department as department
       `,
@@ -360,7 +368,7 @@ router.put("/admin/deactivate/:userId", async (req, res) => {
 
   try {
     const getResult = await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId}) RETURN p`,
+      `MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower($userId) RETURN p`,
       { userId }
     );
 
@@ -380,14 +388,14 @@ router.put("/admin/deactivate/:userId", async (req, res) => {
     cleanedProfile.updatedAt = now;
 
     await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId})
+      `MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower($userId)
        SET p = $data
        RETURN p`,
       { userId, data: cleanedProfile }
     );
 
     await session.run(
-      `MATCH (u:User {username: $userId})
+      `MATCH (u:User) WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
        SET u.profileStatus = 'DEACTIVATED'`,
       { userId }
     );
@@ -435,7 +443,7 @@ router.put("/admin/reactivate/:userId", async (req, res) => {
 
   try {
     const getResult = await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId}) RETURN p`,
+      `MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower($userId) RETURN p`,
       { userId }
     );
 
@@ -454,14 +462,14 @@ router.put("/admin/reactivate/:userId", async (req, res) => {
     delete cleanedProfile.profileDeactivationReason;
 
     await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId})
+      `MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower($userId)
        SET p = $data
        RETURN p`,
       { userId, data: cleanedProfile }
     );
 
     await session.run(
-      `MATCH (u:User {username: $userId})
+      `MATCH (u:User) WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
        SET u.profileStatus = 'APPROVED'`,
       { userId }
     );
@@ -509,11 +517,13 @@ router.get("/admin/stats", async (req, res) => {
   try {
     const result = await session.run(
       `MATCH (p:PersonalDetails)
+       OPTIONAL MATCH (u:User) WHERE toLower(u.username) = toLower(p.userId) OR toLower(u.email) = toLower(p.userId)
+       WITH p, toUpper(COALESCE(p.profileStatus, u.profileStatus, 'PENDING')) AS status
        RETURN 
-         COUNT(CASE WHEN p.profileStatus = 'PENDING' THEN 1 END) as pending,
-         COUNT(CASE WHEN p.profileStatus = 'APPROVED' THEN 1 END) as approved,
-         COUNT(CASE WHEN p.profileStatus = 'REJECTED' THEN 1 END) as rejected,
-         COUNT(CASE WHEN p.profileStatus = 'DEACTIVATED' THEN 1 END) as deactivated,
+         COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending,
+         COUNT(CASE WHEN status = 'APPROVED' THEN 1 END) as approved,
+         COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected,
+         COUNT(CASE WHEN status = 'DEACTIVATED' THEN 1 END) as deactivated,
          COUNT(p) as total
       `
     );
