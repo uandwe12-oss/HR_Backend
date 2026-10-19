@@ -1,35 +1,68 @@
 const nodemailer = require('nodemailer');
-require('dotenv').config();
+const dotenv = require('dotenv');
+dotenv.config();
 
-// Create reusable transporter object using Outlook SMTP transport
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.office365.com',
-  port: process.env.SMTP_PORT || 587,
-  secure: process.env.SMTP_SECURE === 'true', // false for TLS (port 587)
-  auth: {
-    user: process.env.SMTP_EMAIL,
-    pass: process.env.SMTP_PASSWORD,
-  },
-  tls: {
-    ciphers: 'SSLv3'
+function getTransporter() {
+  // Reload .env so changes are picked up immediately without restarting server
+  dotenv.config({ override: true });
+
+  const email = (process.env.SMTP_EMAIL || '').trim();
+  const rawPass = process.env.SMTP_PASSWORD || '';
+  // Clean spaces from 16-letter Google App Password (e.g. "abcd efgh ijkl mnop" -> "abcdefghijklmnop")
+  const pass = rawPass.replace(/\s+/g, '').trim();
+  const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim();
+  const port = parseInt(process.env.SMTP_PORT || '587', 10);
+  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+
+  if (host.includes('gmail')) {
+    return nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: email,
+        pass: pass
+      }
+    });
   }
-});
+
+  return nodemailer.createTransport({
+    host: host,
+    port: port,
+    secure: secure,
+    auth: {
+      user: email,
+      pass: pass
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  });
+}
 
 /**
  * Reusable function to send an email
  * @param {Object} options - Email options (to, subject, text, html)
  */
-const sendEmail = async ({ to, cc, bcc, subject, text, html }) => {
+const sendEmail = async ({ to, cc, bcc, subject, text, html, attachments, from }) => {
   try {
+    const transporter = getTransporter();
+    const fromEmail = (process.env.SMTP_EMAIL || '').trim();
+    const fromName = (process.env.SMTP_FROM_NAME || 'UANDWE Team').trim();
+    const defaultFrom = fromName ? `"${fromName}" <${fromEmail}>` : fromEmail;
+
+    const plainText = text || (html ? html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '');
+
     const mailOptions = {
-      from: `"HR Portal" <${process.env.SMTP_EMAIL}>`,
+      from: from || defaultFrom,
       to,
       subject,
-      text,
+      text: plainText,
       html
     };
     if (cc) mailOptions.cc = cc;
     if (bcc) mailOptions.bcc = bcc;
+    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+      mailOptions.attachments = attachments;
+    }
 
     const info = await transporter.sendMail(mailOptions);
     console.log(`✅ Email sent successfully to ${to}. Message ID: ${info.messageId}`);
