@@ -10,7 +10,7 @@ const crypto = require("crypto");
 // ==========================================
 // Constants
 // ==========================================
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://uandwe.com/myuandwe";
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173/myuandwe";
 
 // ==========================================
 // Microsoft MSAL Configuration
@@ -115,11 +115,17 @@ router.get("/microsoft/callback", async (req, res) => {
         MATCH (u:User)
         WHERE toLower(u.username) = $email
         SET u.loginCount = coalesce(u.loginCount, 0) + 1
+        WITH u
+        OPTIONAL MATCH (p:PersonalDetails)
+        WHERE toLower(p.userId) = toLower(u.username) OR toLower(p.emailId) = toLower(u.username) OR (u.email IS NOT NULL AND toLower(p.emailId) = toLower(u.email))
         RETURN
           u.username AS username,
           u.role AS role,
-          u.name AS name,
-          u.assignedClient AS assignedClient,
+          coalesce(u.name, p.fullName, p.firstName + ' ' + p.lastName) AS name,
+          u.assignedCompany AS userAssignedCompany,
+          u.assignedClient AS userAssignedClient,
+          p.assignedCompany AS personalAssignedCompany,
+          p.assignedClient AS personalAssignedClient,
           u.loginCount AS loginCount
         `,
         {
@@ -171,6 +177,7 @@ router.get("/microsoft/callback", async (req, res) => {
         var role = "Pending";
         var name = displayName;
         var assignedClient = null;
+        var assignedCompany = null;
         var isFirstLogin = true;
 
       } else {
@@ -183,7 +190,23 @@ router.get("/microsoft/callback", async (req, res) => {
         var username = record.get("username");
         var role = record.get("role");
         var name = record.get("name") || normalizedEmail;
-        var assignedClient = record.get("assignedClient");
+        var rawUserComp = record.get("userAssignedCompany");
+        var rawUserClient = record.get("userAssignedClient");
+        var rawPersComp = record.get("personalAssignedCompany");
+        var rawPersClient = record.get("personalAssignedClient");
+
+        var cleanVal = (val) => {
+          if (!val) return null;
+          if (Array.isArray(val)) {
+            const filtered = val.filter(x => typeof x === 'string' && x.trim() !== '');
+            return filtered.length > 0 ? (filtered.length === 1 ? filtered[0] : filtered) : null;
+          }
+          if (typeof val === 'string' && val.trim() !== '') return val.trim();
+          return null;
+        };
+
+        var assignedCompany = cleanVal(rawPersComp) || cleanVal(rawUserComp) || (typeof cleanVal(rawUserClient) === 'string' ? cleanVal(rawUserClient) : (Array.isArray(rawUserClient) && rawUserClient[0] ? rawUserClient[0] : null));
+        var assignedClient = cleanVal(rawUserClient) || cleanVal(rawPersClient) || assignedCompany || null;
         
         const loginCount = record.get("loginCount").toNumber ? record.get("loginCount").toNumber() : record.get("loginCount");
         var isFirstLogin = loginCount === 1;
@@ -202,7 +225,9 @@ router.get("/microsoft/callback", async (req, res) => {
         username: username,
         name: name,
         role: role,
-        clientName: assignedClient,
+        assignedCompany: assignedCompany || null,
+        assignedClient: assignedClient || assignedCompany || null,
+        clientName: assignedClient || assignedCompany || null,
         isFirstLogin: isFirstLogin
       };
 
