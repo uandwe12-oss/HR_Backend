@@ -330,12 +330,36 @@ router.get("/", async (req, res) => {
   try {
     if (userId) {
       const result = await session.run(
-        `MATCH (p:PersonalDetails {userId: $userId})
-         RETURN p { ${RETURN_FIELDS} } as personalDetails`,
+        `OPTIONAL MATCH (p:PersonalDetails)
+         WHERE toLower(p.userId) = toLower($userId) OR toLower(p.emailId) = toLower($userId)
+         OPTIONAL MATCH (u:User)
+         WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
+         RETURN p { ${RETURN_FIELDS} } as personalDetails,
+                u.assignedCompany as userAssignedCompany,
+                u.assignedClient as userAssignedClient,
+                u.role as userRole`,
         { userId }
       );
 
-      if (result.records.length === 0) {
+      const record = result.records[0];
+      const userAssignedCompany = record ? record.get("userAssignedCompany") : null;
+      const userAssignedClient = record ? record.get("userAssignedClient") : null;
+      const userRole = record ? record.get("userRole") : null;
+      let personalDetails = record ? record.get("personalDetails") : null;
+
+      if (!personalDetails) {
+        if (userAssignedCompany || userAssignedClient) {
+          return res.json({
+            success: true,
+            profileCompleted: false,
+            data: {
+              userId,
+              assignedCompany: userAssignedCompany || (typeof userAssignedClient === 'string' ? userAssignedClient : (Array.isArray(userAssignedClient) ? userAssignedClient[0] : null)),
+              assignedClient: (typeof userAssignedClient === 'string' ? userAssignedClient : (Array.isArray(userAssignedClient) ? userAssignedClient[0] : null)) || userAssignedCompany,
+              role: userRole
+            }
+          });
+        }
         return res.json({
           success: true,
           profileCompleted: false,
@@ -343,8 +367,22 @@ router.get("/", async (req, res) => {
         });
       }
 
-      const personalDetails = result.records[0].get("personalDetails");
       normalizePersonalDetails(personalDetails);
+
+      const effectiveCompany = (personalDetails.assignedCompany && typeof personalDetails.assignedCompany === 'string' && personalDetails.assignedCompany.trim() !== '')
+        ? personalDetails.assignedCompany.trim()
+        : (userAssignedCompany && typeof userAssignedCompany === 'string' && userAssignedCompany.trim() !== '')
+          ? userAssignedCompany.trim()
+          : (typeof userAssignedClient === 'string' && userAssignedClient.trim() !== '')
+            ? userAssignedClient.trim()
+            : (Array.isArray(userAssignedClient) && userAssignedClient.length > 0)
+              ? userAssignedClient[0]
+              : null;
+
+      if (effectiveCompany) {
+        personalDetails.assignedCompany = effectiveCompany;
+        personalDetails.assignedClient = effectiveCompany;
+      }
 
       return res.json({
         success: true,
@@ -354,14 +392,18 @@ router.get("/", async (req, res) => {
     }
 
     if (email) {
-
       const result = await session.run(
-        `MATCH (p:PersonalDetails {emailId: $email})
-         RETURN p { ${RETURN_FIELDS} } as personalDetails`,
+        `OPTIONAL MATCH (p:PersonalDetails)
+         WHERE toLower(p.emailId) = toLower($email) OR toLower(p.personalEmailId) = toLower($email) OR toLower(p.userId) = toLower($email)
+         OPTIONAL MATCH (u:User)
+         WHERE toLower(u.username) = toLower($email) OR toLower(u.email) = toLower($email)
+         RETURN p { ${RETURN_FIELDS} } as personalDetails,
+                u.assignedCompany as userAssignedCompany,
+                u.assignedClient as userAssignedClient`,
         { email }
       );
 
-      if (result.records.length === 0) {
+      if (result.records.length === 0 || !result.records[0].get("personalDetails")) {
         return res.status(404).json({
           success: false,
           message: "Personal details not found for this email"
@@ -369,7 +411,24 @@ router.get("/", async (req, res) => {
       }
 
       const personalDetails = result.records[0].get("personalDetails");
+      const userAssignedCompany = result.records[0].get("userAssignedCompany");
+      const userAssignedClient = result.records[0].get("userAssignedClient");
       normalizePersonalDetails(personalDetails);
+
+      const effectiveCompany = (personalDetails.assignedCompany && typeof personalDetails.assignedCompany === 'string' && personalDetails.assignedCompany.trim() !== '')
+        ? personalDetails.assignedCompany.trim()
+        : (userAssignedCompany && typeof userAssignedCompany === 'string' && userAssignedCompany.trim() !== '')
+          ? userAssignedCompany.trim()
+          : (typeof userAssignedClient === 'string' && userAssignedClient.trim() !== '')
+            ? userAssignedClient.trim()
+            : (Array.isArray(userAssignedClient) && userAssignedClient.length > 0)
+              ? userAssignedClient[0]
+              : null;
+
+      if (effectiveCompany) {
+        personalDetails.assignedCompany = effectiveCompany;
+        personalDetails.assignedClient = effectiveCompany;
+      }
 
       return res.json({ success: true, data: personalDetails });
     }
@@ -1074,11 +1133,14 @@ router.post("/", (req, res, next) => {
       }
     );
 
-    // Update User node with the generated PID
+    // Update User node with the generated PID and initial assignedCompany
     await session.run(
-      `MATCH (u:User {username: $userId})
-       SET u.pid = $pid`,
-      { userId, pid: pidToUse }
+      `MATCH (u:User)
+       WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
+       SET u.pid = $pid,
+           u.assignedCompany = coalesce($assignedCompany, u.assignedCompany),
+           u.assignedClient = coalesce($assignedCompany, u.assignedClient)`,
+      { userId, pid: pidToUse, assignedCompany: assignedCompany || null }
     );
 
     // Create notification for Admin
@@ -1971,7 +2033,8 @@ router.put("/:userId", async (req, res) => {
     }
 
     const result = await session.run(
-      `MATCH (p:PersonalDetails {userId: $userId})
+      `MATCH (p:PersonalDetails)
+       WHERE toLower(p.userId) = toLower($userId) OR toLower(p.emailId) = toLower($userId)
        SET ${setClauses.join(', ')}, p.updatedAt = $updatedAt
        RETURN p { ${RETURN_FIELDS} } as personalDetails`,
       params
@@ -1982,6 +2045,21 @@ router.put("/:userId", async (req, res) => {
         success: false,
         message: "Personal details not found"
       });
+    }
+
+    // Also sync assignedCompany to User node if updated
+    const assignedComp = updateData.assignedCompany || updateData.assignedClient;
+    if (assignedComp) {
+      try {
+        await session.run(
+          `MATCH (u:User)
+           WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
+           SET u.assignedCompany = $assignedCompany, u.assignedClient = $assignedCompany`,
+          { userId, assignedCompany: assignedComp }
+        );
+      } catch (userSyncErr) {
+        console.error("⚠️ Error syncing assignedCompany to User node:", userSyncErr);
+      }
     }
 
     const personalDetails = result.records[0].get("personalDetails");
