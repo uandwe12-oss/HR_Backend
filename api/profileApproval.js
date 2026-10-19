@@ -225,8 +225,7 @@ router.put("/admin/approve/:userId", async (req, res) => {
       `MATCH (u:User)
        WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
        SET u.profileStatus = 'APPROVED',
-           u.assignedCompany = $assignedCompany,
-           u.assignedClient = $assignedCompany`,
+           u.assignedCompany = $assignedCompany`,
       { userId, assignedCompany: cleanedProfile.assignedCompany || "" }
     );
 
