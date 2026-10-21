@@ -94,13 +94,36 @@ router.get("/birthdays", async (req, res) => {
     const result = await session.run(`
       MATCH (p:PersonalDetails)
       WHERE p.dateOfBirth IS NOT NULL
+      OPTIONAL MATCH (u:User)
+        WHERE (u.username = p.userId OR toLower(u.username) = toLower(p.userId) OR u.username = p.employeeNumber)
+      OPTIONAL MATCH (u)-[:MEMBER_OF]->(t:Team)
+      OPTIONAL MATCH (s:User)-[:SUPERVISES]->(t)
+      OPTIONAL MATCH (sp:PersonalDetails)
+        WHERE (sp.userId = s.username OR toLower(sp.userId) = toLower(s.username) OR sp.employeeNumber = s.username)
       RETURN p.fullName AS fullName,
              p.employeeNumber AS employeeNumber,
              p.jobTitle AS jobTitle,
              p.profilePhotoLink AS profilePhotoLink,
              p.dateOfBirth AS dateOfBirth,
-             p.emailId AS emailId,
-             p.supervisor AS supervisor
+             COALESCE(
+               NULLIF(trim(p.emailId), ''),
+               NULLIF(trim(p.workEmail), ''),
+               NULLIF(trim(p.professionalEmail), '')
+             ) AS emailId,
+             COALESCE(
+               NULLIF(trim(p.supervisor), ''),
+               NULLIF(trim(p.manager), ''),
+               NULLIF(trim(p.reportingManager), ''),
+               NULLIF(trim(sp.fullName), ''),
+               NULLIF(trim(s.name), ''),
+               NULLIF(trim(s.username), '')
+             ) AS supervisor,
+             COALESCE(
+               NULLIF(trim(sp.emailId), ''),
+               NULLIF(trim(sp.workEmail), ''),
+               NULLIF(trim(sp.professionalEmail), ''),
+               NULLIF(trim(s.email), '')
+             ) AS supervisorEmail
     `);
 
     const today = new Date();
@@ -127,6 +150,7 @@ router.get("/birthdays", async (req, res) => {
         profilePhotoLink: record.get("profilePhotoLink") || null,
         emailId: record.get("emailId") || null,
         supervisor: record.get("supervisor") || null,
+        supervisorEmail: record.get("supervisorEmail") || null,
       };
 
       if (dobMonth === todayMonth && dobDate === todayDate) {
