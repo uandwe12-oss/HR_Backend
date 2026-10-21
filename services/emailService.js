@@ -46,7 +46,7 @@ const sendEmail = async ({ to, cc, bcc, subject, text, html, attachments, from }
   try {
     const transporter = getTransporter();
     const fromEmail = (process.env.SMTP_EMAIL || '').trim();
-    const fromName = (process.env.SMTP_FROM_NAME || 'UANDWE Team').trim();
+    const fromName = (process.env.SMTP_FROM_NAME || 'UANDWE').trim();
     const defaultFrom = fromName ? `"${fromName}" <${fromEmail}>` : fromEmail;
 
     const plainText = text || (html ? html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '');
@@ -66,6 +66,9 @@ const sendEmail = async ({ to, cc, bcc, subject, text, html, attachments, from }
 
     const info = await transporter.sendMail(mailOptions);
     console.log(`✅ Email sent successfully to ${to}. Message ID: ${info.messageId}`);
+    console.log(`   SMTP Response: ${info.response}`);
+    console.log(`   Accepted Recipients: ${JSON.stringify(info.accepted)}`);
+    console.log(`   Rejected Recipients: ${JSON.stringify(info.rejected)}`);
     return { success: true, info };
   } catch (error) {
     console.error(`❌ Failed to send email to ${to}:`, error.message);
@@ -114,6 +117,8 @@ const sendSalaryAdvanceEmail = async (requestDetails) => {
     </table>
     <br>
     <p>Please log in to the HR Portal Admin Dashboard to approve or reject this request.</p>
+    <br>
+    <p style="color: #94a3b8; font-size: 11px; margin: 0; font-style: italic;">This is a system generated mail.</p>
   `;
 
   return await sendEmail({
