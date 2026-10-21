@@ -27,7 +27,8 @@ router.get("/", async (req, res) => {
               country: node.country,
               role: node.role,
               moduleName: mod.moduleName,
-              status: mod.status
+              status: mod.status,
+              customTitle: mod.customTitle || mod.title || mod.moduleName
             });
           });
         } catch (e) {
@@ -44,7 +45,8 @@ router.get("/", async (req, res) => {
               country: node.country,
               role: node.role,
               moduleName,
-              status
+              status,
+              customTitle: moduleName
             });
           }
         });
@@ -54,7 +56,8 @@ router.get("/", async (req, res) => {
           country: node.country,
           role: node.role,
           moduleName: node.moduleName,
-          status: node.status
+          status: node.status,
+          customTitle: node.customTitle || node.moduleName
         });
       }
     });
@@ -84,7 +87,11 @@ router.post("/", async (req, res) => {
   const role = configs[0].role;
   
   // Format as stringified JSON array to match CountryFieldConfig style
-  const simplifiedConfigs = configs.map(c => ({ moduleName: c.moduleName, status: c.status }));
+  const simplifiedConfigs = configs.map(c => ({
+    moduleName: c.moduleName,
+    status: c.status,
+    customTitle: c.customTitle || c.title || c.moduleName
+  }));
   const modulesString = JSON.stringify(simplifiedConfigs);
   
   try {
