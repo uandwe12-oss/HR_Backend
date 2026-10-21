@@ -312,6 +312,10 @@ router.get("/:demandId", async (req, res) => {
         // Full history of all actions
         history: history,
 
+        skillsEvaluated: relationship.skillsEvaluated ? (typeof relationship.skillsEvaluated === 'string' ? JSON.parse(relationship.skillsEvaluated) : relationship.skillsEvaluated) : [],
+        overallStatus: relationship.overallStatus || '',
+        overallComments: relationship.overallComments || '',
+
         // Additional fields if needed for display
         email: candidate.Email || '',
         mobile: candidate['Mobile No'] || '',
@@ -347,7 +351,7 @@ router.get("/:demandId", async (req, res) => {
  * Update candidate status with reason and track who did it (WITH ZONE INTEGRATION)
  */
 router.put("/status", async (req, res) => {
-  const { candidateId, demandId, status, reason, changedBy } = req.body;
+  const { candidateId, demandId, status, reason, changedBy, skillsEvaluated, overallStatus, overallComments } = req.body;
 
   // console.log(`\n📡 PUT /api/selected-candidates/status - Updating candidate ${candidateId} to ${status}`);
   // console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
@@ -417,13 +421,26 @@ router.put("/status", async (req, res) => {
     const now = new Date().toISOString();
     const changedByName = changedBy || relationship.selectedBy || 'Unknown';
 
+    const finalSkills = (Array.isArray(skillsEvaluated) && skillsEvaluated.length > 0)
+      ? skillsEvaluated
+      : (relationship.skillsEvaluated ? (typeof relationship.skillsEvaluated === 'string' ? JSON.parse(relationship.skillsEvaluated) : relationship.skillsEvaluated) : []);
+    const finalOverallStatus = (overallStatus !== undefined && overallStatus !== '')
+      ? overallStatus
+      : (relationship.overallStatus || '');
+    const finalOverallComments = (overallComments !== undefined && overallComments !== '')
+      ? overallComments
+      : (relationship.overallComments || '');
+
     const historyEntry = {
       action: 'STATUS_CHANGED',
       fromStatus: relationship.status || 'In Progress',
       toStatus: status,
       changedBy: changedByName,
       changedAt: now,
-      reason: reason || `Status changed to ${status}`
+      reason: reason || `Status changed to ${status}`,
+      skillsEvaluated: finalSkills,
+      overallStatus: finalOverallStatus,
+      overallComments: finalOverallComments
     };
 
     // Add to history array
@@ -436,7 +453,10 @@ router.put("/status", async (req, res) => {
     SET r.status = $status,
         r.history = $history,
         r.updatedAt = $updatedAt,
-        r.updatedBy = $changedBy
+        r.updatedBy = $changedBy,
+        r.skillsEvaluated = $skillsEvaluated,
+        r.overallStatus = $overallStatus,
+        r.overallComments = $overallComments
 
     RETURN r, c
   `, {
@@ -445,7 +465,10 @@ router.put("/status", async (req, res) => {
       status: status,
       history: JSON.stringify(history),
       updatedAt: now,
-      changedBy: changedByName
+      changedBy: changedByName,
+      skillsEvaluated: JSON.stringify(finalSkills),
+      overallStatus: finalOverallStatus,
+      overallComments: finalOverallComments
     });
 
     // /console.log("UPDATE RESULT RECORDS:", updateResult.records.length);
@@ -705,7 +728,7 @@ router.get("/history/:demandId/:candidateId", async (req, res) => {
  * Update candidate status and handle zone removal if status becomes active
  */
 router.put("/status-with-zone", async (req, res) => {
-  const { candidateId, demandId, status, reason, changedBy } = req.body;
+  const { candidateId, demandId, status, reason, changedBy, skillsEvaluated, overallStatus, overallComments } = req.body;
 
   // console.log(`\n📡 PUT /api/selected-candidates/status-with-zone - Updating candidate ${candidateId} to ${status}`);
   // console.log(`Reason: ${reason}, Changed by: ${changedBy}`);
@@ -795,13 +818,26 @@ router.put("/status-with-zone", async (req, res) => {
     const now = new Date().toISOString();
     const changedByName = changedBy || relationship.selectedBy || 'Unknown';
 
+    const finalSkills = (Array.isArray(skillsEvaluated) && skillsEvaluated.length > 0)
+      ? skillsEvaluated
+      : (relationship.skillsEvaluated ? (typeof relationship.skillsEvaluated === 'string' ? JSON.parse(relationship.skillsEvaluated) : relationship.skillsEvaluated) : []);
+    const finalOverallStatus = (overallStatus !== undefined && overallStatus !== '')
+      ? overallStatus
+      : (relationship.overallStatus || '');
+    const finalOverallComments = (overallComments !== undefined && overallComments !== '')
+      ? overallComments
+      : (relationship.overallComments || '');
+
     const historyEntry = {
       action: 'STATUS_CHANGED',
       fromStatus: relationship.status || 'In Progress',
       toStatus: status,
       changedBy: changedByName,
       changedAt: now,
-      reason: reason || `Status changed to ${status}`
+      reason: reason || `Status changed to ${status}`,
+      skillsEvaluated: finalSkills,
+      overallStatus: finalOverallStatus,
+      overallComments: finalOverallComments
     };
 
     history.push(historyEntry);
@@ -812,7 +848,10 @@ router.put("/status-with-zone", async (req, res) => {
         SET r.status = $status,
             r.history = $history,
             r.updatedAt = $updatedAt,
-            r.updatedBy = $changedBy
+            r.updatedBy = $changedBy,
+            r.skillsEvaluated = $skillsEvaluated,
+            r.overallStatus = $overallStatus,
+            r.overallComments = $overallComments
         RETURN r, c
       `, {
       demandId: demandId ? parseInt(demandId) : null,
@@ -820,7 +859,10 @@ router.put("/status-with-zone", async (req, res) => {
       status: status,
       history: JSON.stringify(history),
       updatedAt: now,
-      changedBy: changedByName
+      changedBy: changedByName,
+      skillsEvaluated: JSON.stringify(finalSkills),
+      overallStatus: finalOverallStatus,
+      overallComments: finalOverallComments
     });
 
     if (!updateResult.records.length) {
