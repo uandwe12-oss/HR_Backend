@@ -224,6 +224,10 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
+    if (leaveType === 'Work From Home' || leaveType === 'WFH') {
+      return res.status(400).json({ success: false, message: "Work From Home option is not available." });
+    }
+
     if (!customReason || customReason.trim() === '') {
       return res.status(400).json({ success: false, message: "Additional Reason is mandatory." });
     }
