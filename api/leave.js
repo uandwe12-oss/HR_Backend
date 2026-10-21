@@ -232,21 +232,26 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
       return res.status(400).json({ success: false, message: "Additional Reason cannot exceed 50 words." });
     }
 
-    // Holiday Check - Flexible matching for company/group
+    // Holiday Check - Matches target company and linked holiday calendars
+    const cleanCompany = (company || "").trim();
     const holidayResult = await session.run(`
-      MATCH (g:Group)
-      WHERE toLower(g.name) = toLower($company)
-         OR replace(toLower(g.name), ' ', '') = replace(toLower($company), ' ', '')
-         OR (g.client IS NOT NULL AND toLower(g.client) = toLower($company))
-         OR (g.client IS NOT NULL AND replace(toLower(g.client), ' ', '') = replace(toLower($company), ' ', ''))
-         OR toLower(g.name) CONTAINS toLower($company)
-         OR toLower($company) CONTAINS toLower(g.name)
-         OR (g.client IS NOT NULL AND toLower($company) CONTAINS toLower(g.client))
-      OPTIONAL MATCH (g)-[:SHARES_HOLIDAY_CALENDAR*0..]-(linkedGroup:Group)
-      WITH DISTINCT linkedGroup
-      MATCH (linkedGroup)-[:HAS_HOLIDAY]->(h:Holiday)
+      MATCH (target:Group)
+      WHERE toLower(target.name) = toLower($company)
+         OR replace(toLower(target.name), ' ', '') = replace(toLower($company), ' ', '')
+         OR (target.client IS NOT NULL AND (toLower(target.client) = toLower($company) OR replace(toLower(target.client), ' ', '') = replace(toLower($company), ' ', '')))
+      OPTIONAL MATCH (target)-[:SHARES_HOLIDAY_CALENDAR*1..5]-(linked:Group)
+      WITH collect(DISTINCT target) + collect(DISTINCT linked) AS allMatched
+      UNWIND allMatched AS item
+      WITH DISTINCT item WHERE item IS NOT NULL
+      OPTIONAL MATCH (variant:Group)
+      WHERE toLower(variant.name) = toLower(item.name)
+         OR replace(toLower(variant.name), ' ', '') = replace(toLower(item.name), ' ', '')
+      WITH collect(DISTINCT item) + collect(DISTINCT variant) AS allGroups
+      UNWIND allGroups AS finalGroup
+      WITH DISTINCT finalGroup WHERE finalGroup IS NOT NULL
+      MATCH (finalGroup)-[:HAS_HOLIDAY]->(h:Holiday)
       RETURN DISTINCT h.date as date
-    `, { company });
+    `, { company: cleanCompany });
     
     const companyHolidays = holidayResult.records.map(r => r.get('date')).filter(Boolean);
     if (companyHolidays.includes(startDate) || companyHolidays.includes(endDate)) {
