@@ -74,10 +74,25 @@ const TEMPLATES = {
   },
 };
 
+function formatName(name) {
+  if (!name) return "";
+  return name
+    .split(" ")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
 // ─── Build professional HTML email with uandwe Logo directly in HTML ─────────
 function buildHtmlEmail(employeeName, messageText, logoBase64 = "") {
-  // Convert newlines to <br> for HTML rendering
-  const htmlMessage = messageText.replace(/\n/g, "<br>");
+  // Format employee name with Proper Capitalization (e.g. "illaya bharathi" -> "Illaya Bharathi")
+  const formattedEmployeeName = formatName(employeeName);
+
+  // Convert newlines to <br> for HTML rendering, ensuring name in message is also properly capitalized
+  let formattedMessage = messageText;
+  if (employeeName && formattedEmployeeName && employeeName !== formattedEmployeeName) {
+    formattedMessage = formattedMessage.replace(new RegExp(employeeName, 'g'), formattedEmployeeName);
+  }
+  const htmlMessage = formattedMessage.replace(/\n/g, "<br>");
 
   return `
   <!DOCTYPE html>
@@ -99,22 +114,22 @@ function buildHtmlEmail(employeeName, messageText, logoBase64 = "") {
                   <tr>
                     <td align="center" bgcolor="#f26522" style="background-color:#f26522; width:68px; height:68px; border-radius:16px; text-align:center; vertical-align:middle; padding:0; overflow:hidden;">
                       ${logoBase64 ? `
-                        <img src="${logoBase64}" alt="uandwe" width="68" height="68" style="display:block; width:68px; height:68px; border-radius:16px; border:0; outline:none; text-decoration:none;" />
+                        <img src="${logoBase64}" alt="UANDWE" width="68" height="68" style="display:block; width:68px; height:68px; border-radius:16px; border:0; outline:none; text-decoration:none;" />
                       ` : `
-                        <span style="color:#ffffff; font-size:16px; font-weight:800; font-family:'Segoe UI', Arial, sans-serif; letter-spacing:-0.5px;">uandwe</span>
+                        <span style="color:#ffffff; font-size:16px; font-weight:800; font-family:'Segoe UI', Arial, sans-serif; letter-spacing:0.5px;">UANDWE</span>
                       `}
                     </td>
                   </tr>
                 </table>
                 <!-- Cake Emoji -->
                 <div style="font-size:46px; line-height:1; margin-bottom:12px;">🎂</div>
-                <!-- Happy Birthday Title (High contrast, Outlook compatible) -->
+                <!-- Happy Birthday Title (Natural title case, not all-caps) -->
                 <h1 style="color:#1e3a8a; font-size:28px; font-weight:800; margin:0 0 6px; letter-spacing:-0.5px; font-family:'Segoe UI', Arial, sans-serif;">
                   Happy Birthday
                 </h1>
-                ${employeeName ? `
+                ${formattedEmployeeName ? `
                 <p style="color:#334155; font-size:17px; font-weight:600; margin:0 0 16px; font-family:'Segoe UI', Arial, sans-serif;">
-                  ${employeeName}
+                  ${formattedEmployeeName}
                 </p>
                 ` : ''}
                 <!-- Accent Line -->
@@ -132,11 +147,11 @@ function buildHtmlEmail(employeeName, messageText, logoBase64 = "") {
             <!-- Footer -->
             <tr>
               <td style="padding:20px 40px 26px; border-top:1px solid #f1f5f9; background-color:#fafafa; text-align:center;">
-                <p style="color:#64748b; font-size:12px; margin:0 0 4px; font-weight:600; font-family:'Segoe UI', Arial, sans-serif;">
-                  uandwe • Human Resources
+                <p style="color:#64748b; font-size:12px; margin:0 0 4px; font-weight:700; font-family:'Segoe UI', Arial, sans-serif; letter-spacing:0.3px;">
+                  UANDWE &bull; HUMAN RESOURCES
                 </p>
-                <p style="color:#94a3b8; font-size:11px; margin:0; font-family:'Segoe UI', Arial, sans-serif;">
-                  Sent via HR Portal &bull; Birthday Wishes System
+                <p style="color:#94a3b8; font-size:10.5px; margin:0; font-family:'Segoe UI', Arial, sans-serif;">
+                  This is a system generated mail.
                 </p>
               </td>
             </tr>
@@ -182,59 +197,73 @@ router.post("/send-wishes", async (req, res) => {
       });
     }
 
-    // ── Fetch birthday employee details (prioritize unique email, then employeeNumber, then fullName) ──
+    // ── Fetch birthday employee details & supervisor (prioritize unique email, then employeeNumber, then fullName) ──
     let empRecord = null;
     let employeeName = (birthdayEmployeeName || "").trim();
     let employeeEmail = (birthdayEmployeeEmail || "").trim();
-    let supervisorName = null;
+    let empUserId = null;
+    let supervisorName = (req.body.supervisor || "").trim() || null;
+    let supervisorEmail = (req.body.supervisorEmail || "").trim() || null;
+    let teamSupervisorEmail = null;
+    let teamSupervisorName = null;
 
-    if (birthdayEmployeeEmail && String(birthdayEmployeeEmail).trim() !== '') {
-      const emailResult = await session.run(
-        `MATCH (p:PersonalDetails)
-         WHERE toLower(p.emailId) = toLower($email)
-         RETURN p.fullName AS fullName, p.emailId AS emailId, p.supervisor AS supervisor, p.employeeNumber AS employeeNumber
-         LIMIT 1`,
-        { email: String(birthdayEmployeeEmail).trim() }
-      );
-      if (emailResult.records.length > 0) {
-        empRecord = emailResult.records[0];
-      }
-    }
+    const findQuery = `
+      MATCH (p:PersonalDetails)
+      WHERE (
+        ($email <> '' AND (
+          toLower(trim(p.emailId)) = toLower(trim($email)) OR
+          toLower(trim(p.workEmail)) = toLower(trim($email)) OR
+          toLower(trim(p.professionalEmail)) = toLower(trim($email))
+        )) OR
+        ($empId <> '' AND (
+          p.employeeNumber = $empId OR
+          toLower(trim(p.userId)) = toLower(trim($empId))
+        )) OR
+        ($name <> '' AND toLower(trim(p.fullName)) = toLower(trim($name)))
+      )
+      OPTIONAL MATCH (u:User) WHERE (u.username = p.userId OR toLower(u.username) = toLower(p.userId) OR u.username = p.employeeNumber)
+      OPTIONAL MATCH (u)-[:MEMBER_OF]->(t:Team)
+      OPTIONAL MATCH (s:User)-[:SUPERVISES]->(t)
+      OPTIONAL MATCH (sp:PersonalDetails) WHERE (sp.userId = s.username OR toLower(sp.userId) = toLower(s.username) OR sp.employeeNumber = s.username)
+      RETURN p.fullName AS fullName,
+             COALESCE(NULLIF(trim(p.emailId), ''), NULLIF(trim(p.workEmail), ''), NULLIF(trim(p.professionalEmail), '')) AS emailId,
+             COALESCE(
+               NULLIF(trim(p.supervisor), ''),
+               NULLIF(trim(p.manager), ''),
+               NULLIF(trim(p.reportingManager), ''),
+               NULLIF(trim(sp.fullName), ''),
+               NULLIF(trim(s.name), ''),
+               NULLIF(trim(s.username), '')
+             ) AS supervisor,
+             COALESCE(
+               NULLIF(trim(sp.emailId), ''),
+               NULLIF(trim(sp.workEmail), ''),
+               NULLIF(trim(sp.professionalEmail), ''),
+               NULLIF(trim(s.email), '')
+             ) AS teamSupervisorEmail,
+             COALESCE(sp.fullName, s.name, s.username) AS teamSupervisorName,
+             p.employeeNumber AS employeeNumber,
+             p.userId AS userId
+      LIMIT 1
+    `;
 
-    if (!empRecord && birthdayEmployeeId && String(birthdayEmployeeId).trim() !== '' && String(birthdayEmployeeId).trim() !== 'null' && String(birthdayEmployeeId).trim() !== 'undefined' && String(birthdayEmployeeId).trim() !== 'N/A') {
-      const idResult = await session.run(
-        `MATCH (p:PersonalDetails)
-         WHERE (p.employeeNumber = $empId OR toLower(p.userId) = toLower($empId))
-         RETURN p.fullName AS fullName, p.emailId AS emailId, p.supervisor AS supervisor, p.employeeNumber AS employeeNumber
-         LIMIT 1`,
-        { empId: String(birthdayEmployeeId).trim() }
-      );
-      if (idResult.records.length > 0) {
-        empRecord = idResult.records[0];
-      }
-    }
+    const empResult = await session.run(findQuery, {
+      email: employeeEmail,
+      empId: (birthdayEmployeeId || "").trim(),
+      name: employeeName
+    });
 
-    if (!empRecord && birthdayEmployeeName && String(birthdayEmployeeName).trim() !== '') {
-      const nameResult = await session.run(
-        `MATCH (p:PersonalDetails)
-         WHERE toLower(p.fullName) = toLower($name)
-         RETURN p.fullName AS fullName, p.emailId AS emailId, p.supervisor AS supervisor, p.employeeNumber AS employeeNumber
-         LIMIT 1`,
-        { name: String(birthdayEmployeeName).trim() }
-      );
-      if (nameResult.records.length > 0) {
-        empRecord = nameResult.records[0];
+    if (empResult.records.length > 0) {
+      empRecord = empResult.records[0];
+      if (!employeeName) employeeName = empRecord.get("fullName") || "";
+      if (!employeeEmail) employeeEmail = empRecord.get("emailId") || "";
+      empUserId = empRecord.get("userId") || empRecord.get("employeeNumber") || null;
+      if (!supervisorName) supervisorName = empRecord.get("supervisor");
+      teamSupervisorEmail = empRecord.get("teamSupervisorEmail");
+      teamSupervisorName = empRecord.get("teamSupervisorName");
+      if (!supervisorEmail && teamSupervisorEmail) {
+        supervisorEmail = teamSupervisorEmail;
       }
-    }
-
-    if (empRecord) {
-      if (!employeeName) {
-        employeeName = empRecord.get("fullName") || "";
-      }
-      if (!employeeEmail) {
-        employeeEmail = empRecord.get("emailId") || "";
-      }
-      supervisorName = empRecord.get("supervisor");
     } else if (!employeeEmail && !employeeName) {
       return res.status(404).json({
         success: false,
@@ -252,36 +281,127 @@ router.post("/send-wishes", async (req, res) => {
       toList.push(employeeEmail);
     }
 
-    // 2. Send to all employees via BCC
+    // 2. Send to all employees via BCC (Only employees with submitted PersonalDetails, using their professional email)
     if (sendToAllEmployees) {
       const allResult = await session.run(
         `MATCH (p:PersonalDetails)
-         WHERE p.emailId IS NOT NULL AND p.emailId <> ''
-         RETURN p.emailId AS emailId`
+         WHERE (p.profileStatus IS NULL OR toUpper(p.profileStatus) <> 'DEACTIVATED')
+           AND (
+             (p.emailId IS NOT NULL AND trim(p.emailId) <> '') OR
+             (p.workEmail IS NOT NULL AND trim(p.workEmail) <> '') OR
+             (p.professionalEmail IS NOT NULL AND trim(p.professionalEmail) <> '')
+           )
+         RETURN DISTINCT COALESCE(
+           NULLIF(trim(p.emailId), ''),
+           NULLIF(trim(p.workEmail), ''),
+           NULLIF(trim(p.professionalEmail), '')
+         ) AS professionalEmail,
+         p.fullName AS fullName,
+         p.employeeNumber AS employeeNumber`
       );
+
+      const existingEmails = new Set(
+        [...toList, ...ccList, ...bccList].map((e) => e.trim().toLowerCase())
+      );
+
       allResult.records.forEach((r) => {
-        const email = r.get("emailId");
-        if (email && email !== employeeEmail && !bccList.includes(email)) {
-          bccList.push(email);
+        const rawEmail = r.get("professionalEmail");
+        if (rawEmail && typeof rawEmail === "string") {
+          const cleanEmail = rawEmail.trim();
+          const lowerEmail = cleanEmail.toLowerCase();
+          if (cleanEmail.includes("@") && !existingEmails.has(lowerEmail)) {
+            bccList.push(cleanEmail);
+            existingEmails.add(lowerEmail);
+          }
         }
       });
+
+      console.log(`📋 [Send to All Employees] Added ${bccList.length} professional employee email(s) from submitted PersonalDetails to BCC:`, bccList);
     }
 
-    // 3. Send to reporting manager
-    if (sendToManager && supervisorName) {
-      // Look up supervisor's email by matching fullName or userId
-      const mgrResult = await session.run(
-        `MATCH (p:PersonalDetails)
-         WHERE p.fullName = $supervisor OR p.userId = $supervisor
-         RETURN p.emailId AS emailId
-         LIMIT 1`,
-        { supervisor: supervisorName }
-      );
-      if (mgrResult.records.length > 0) {
-        const mgrEmail = mgrResult.records[0].get("emailId");
-        if (mgrEmail && !ccList.includes(mgrEmail)) {
-          ccList.push(mgrEmail);
+    // 3. Send to reporting manager (ONLY if user checked sendToManager)
+    const shouldSendToManager = sendToManager === true || sendToManager === 'true';
+    if (shouldSendToManager) {
+      let mgrEmail = (supervisorEmail || teamSupervisorEmail || "").trim();
+      let rawSupervisor = (supervisorName || teamSupervisorName || "").trim();
+
+      // If rawSupervisor is already an email address:
+      if (!mgrEmail && rawSupervisor && rawSupervisor.includes("@")) {
+        mgrEmail = rawSupervisor;
+      }
+
+      // If we don't have mgrEmail yet, look up in PersonalDetails / User:
+      if (!mgrEmail && rawSupervisor) {
+        const mgrResult = await session.run(
+          `MATCH (p:PersonalDetails)
+           WHERE (
+             toLower(trim(p.fullName)) = toLower(trim($supervisor)) OR
+             toLower(trim(p.userId)) = toLower(trim($supervisor)) OR
+             toLower(trim(p.employeeNumber)) = toLower(trim($supervisor)) OR
+             toLower(trim(p.fullName)) CONTAINS toLower(trim($supervisor))
+           )
+           AND (p.profileStatus IS NULL OR toUpper(p.profileStatus) <> 'DEACTIVATED')
+           OPTIONAL MATCH (u:User) WHERE (u.username = p.userId OR toLower(u.username) = toLower(p.userId) OR u.username = p.employeeNumber)
+           RETURN COALESCE(
+             NULLIF(trim(p.emailId), ''),
+             NULLIF(trim(p.workEmail), ''),
+             NULLIF(trim(p.professionalEmail), ''),
+             NULLIF(trim(u.email), '')
+           ) AS professionalEmail,
+           p.fullName AS fullName
+           LIMIT 1`,
+          { supervisor: rawSupervisor }
+        );
+
+        if (mgrResult.records.length > 0) {
+          mgrEmail = (mgrResult.records[0].get("professionalEmail") || "").trim();
+        } else {
+          // Fallback to User node
+          const userResult = await session.run(
+            `MATCH (u:User)
+             WHERE toLower(trim(u.username)) = toLower(trim($supervisor))
+                OR toLower(trim(u.name)) = toLower(trim($supervisor))
+             RETURN u.email AS professionalEmail, u.name AS fullName
+             LIMIT 1`,
+            { supervisor: rawSupervisor }
+          );
+          if (userResult.records.length > 0) {
+            mgrEmail = (userResult.records[0].get("professionalEmail") || "").trim();
+          }
         }
+      }
+
+      // If still not found, check team supervisor by employee's userId / employeeNumber
+      if (!mgrEmail && (empUserId || birthdayEmployeeId)) {
+        const teamMgrResult = await session.run(
+          `MATCH (u:User)
+           WHERE u.username = $uid OR toLower(u.username) = toLower($uid)
+           MATCH (u)-[:MEMBER_OF]->(t:Team)<-[:SUPERVISES]-(s:User)
+           OPTIONAL MATCH (sp:PersonalDetails) WHERE sp.userId = s.username OR toLower(sp.userId) = toLower(s.username) OR sp.employeeNumber = s.username
+           RETURN COALESCE(
+             NULLIF(trim(sp.emailId), ''),
+             NULLIF(trim(sp.workEmail), ''),
+             NULLIF(trim(sp.professionalEmail), ''),
+             NULLIF(trim(s.email), '')
+           ) AS professionalEmail,
+           COALESCE(sp.fullName, s.name, s.username) AS fullName
+           LIMIT 1`,
+          { uid: empUserId || birthdayEmployeeId }
+        );
+        if (teamMgrResult.records.length > 0) {
+          mgrEmail = (teamMgrResult.records[0].get("professionalEmail") || "").trim();
+        }
+      }
+
+      if (mgrEmail && mgrEmail.includes("@")) {
+        const cleanMgrEmail = mgrEmail.trim();
+        const existingEmails = new Set([...toList, ...ccList].map((e) => e.trim().toLowerCase()));
+        if (!existingEmails.has(cleanMgrEmail.toLowerCase())) {
+          ccList.push(cleanMgrEmail);
+          console.log(`👤 [Send to Manager] Added manager (${cleanMgrEmail}) to CC list.`);
+        }
+      } else {
+        console.warn(`⚠️ [Send to Manager] Could not resolve email address for manager (supervisor: "${rawSupervisor}").`);
       }
     }
 
