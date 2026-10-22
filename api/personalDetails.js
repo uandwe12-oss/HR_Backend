@@ -67,7 +67,7 @@ router.get("/validate-unique", async (req, res) => {
     `;
 
     const result = await session.run(query, params);
-
+    
     let errors = {};
     if (result.records.length > 0) {
       for (const record of result.records) {
@@ -164,9 +164,9 @@ router.get("/birthdays", async (req, res) => {
         ) {
           nextBirthdayYear++;
         }
-
+        
         const nextBirthday = new Date(nextBirthdayYear, dobMonth, dobDate);
-
+        
         // Calculate days remaining without time component to avoid timezone issues
         const diffTime = nextBirthday.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
         const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -280,7 +280,6 @@ const RETURN_FIELDS = `
   .hr,
   .employeeNumber,
   .assignedCompany,
-  .assignedClient,
   .selectedDemand,
   .bankName,
   .bankAccountNumber,
@@ -406,9 +405,7 @@ router.get("/", async (req, res) => {
 
       if (effectiveCompany) {
         personalDetails.assignedCompany = effectiveCompany;
-        if (!personalDetails.assignedClient) {
-          personalDetails.assignedClient = userAssignedClient || effectiveCompany;
-        }
+        personalDetails.assignedClient = effectiveCompany;
       }
 
       return res.json({
@@ -454,9 +451,7 @@ router.get("/", async (req, res) => {
 
       if (effectiveCompany) {
         personalDetails.assignedCompany = effectiveCompany;
-        if (!personalDetails.assignedClient) {
-          personalDetails.assignedClient = userAssignedClient || effectiveCompany;
-        }
+        personalDetails.assignedClient = effectiveCompany;
       }
 
       return res.json({ success: true, data: personalDetails });
@@ -548,7 +543,7 @@ router.get("/draft/:userId", async (req, res) => {
       MATCH (d:PersonalDetailsDraft {userId: $userId})
       RETURN d.draftData AS draftData
     `, { userId });
-
+    
     if (result.records.length > 0) {
       const draftDataStr = result.records[0].get("draftData");
       res.json({ success: true, draftData: JSON.parse(draftDataStr) });
@@ -604,11 +599,11 @@ router.post("/", (req, res, next) => {
     { name: 'previousPayslip3', maxCount: 1 }
   ]);
 
-  uploadMiddleware(req, res, (err) => {
+ uploadMiddleware(req, res, (err) => {
     if (err) {
-
-      return res.status(400).json({
-        success: false,
+     
+      return res.status(400).json({ 
+        success: false, 
         message: err.message,
         field: err.field  // This will tell you which field is the problem
       });
@@ -938,7 +933,7 @@ router.post("/", (req, res, next) => {
         relievingLetter1Link = uploadResult.viewLink;
       }
     }
-
+    
     let relievingLetter2Link = null;
     if (relievingLetter2File) {
       const uploadResult = await googleDrive.uploadRelievingLetter2(
@@ -1300,7 +1295,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
 
     const pProps = userCheck.records[0].get("p").properties;
     const currentStatus = pProps.profileStatus;
-
+    
     // Preserve old document links
     let oldAadharDocumentLink = pProps.aadharDocumentLink || null;
     let oldNationalIdDocumentLink = pProps.nationalIdDocumentLink || null;
@@ -1599,7 +1594,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
       );
       if (uploadResult.success) { relievingLetter1Link = uploadResult.viewLink; }
     }
-
+    
     let relievingLetter2Link = oldRelievingLetter2Link;
     if (relievingLetter2File) {
       if (oldRelievingLetter2Link) {
@@ -1905,23 +1900,23 @@ router.put("/admin-update-document/:userId", (req, res, next) => {
 
   // Map documentType → { uploadFn, dbField, deleteFn }
   const DOC_MAP = {
-    aadharDocument: { uploadFn: 'uploadAadharImage', dbField: 'aadharDocumentLink', useAadhar: true },
-    panDocument: { uploadFn: 'uploadPanImage', dbField: 'panDocumentLink', useAadhar: true },
-    nationalIdDocument: { uploadFn: 'uploadNationalIdDocument', dbField: 'nationalIdDocumentLink' },
-    ssnDocument: { uploadFn: 'uploadSsnDocument', dbField: 'ssnDocumentLink' },
-    tenthCertificate: { uploadFn: 'uploadTenthCertificate', dbField: 'tenthCertificateLink' },
-    twelfthCertificate: { uploadFn: 'uploadTwelfthCertificate', dbField: 'twelfthCertificateLink' },
-    graduationCertificate: { uploadFn: 'uploadGraduationCertificate', dbField: 'graduationCertificateLink' },
+    aadharDocument:          { uploadFn: 'uploadAadharImage',            dbField: 'aadharDocumentLink',            useAadhar: true },
+    panDocument:             { uploadFn: 'uploadPanImage',               dbField: 'panDocumentLink',               useAadhar: true },
+    nationalIdDocument:      { uploadFn: 'uploadNationalIdDocument',     dbField: 'nationalIdDocumentLink' },
+    ssnDocument:             { uploadFn: 'uploadSsnDocument',            dbField: 'ssnDocumentLink' },
+    tenthCertificate:        { uploadFn: 'uploadTenthCertificate',       dbField: 'tenthCertificateLink' },
+    twelfthCertificate:      { uploadFn: 'uploadTwelfthCertificate',     dbField: 'twelfthCertificateLink' },
+    graduationCertificate:   { uploadFn: 'uploadGraduationCertificate',  dbField: 'graduationCertificateLink' },
     postGraduationCertificate: { uploadFn: 'uploadPostGraduationCertificate', dbField: 'postGraduationCertificateLink' },
-    resumeDocument: { uploadFn: 'uploadResume', dbField: 'resumeDocumentLink' },
-    visaDocument: { uploadFn: 'uploadVisaDocument', dbField: 'visaDocumentLink' },
-    profilePhoto: { uploadFn: 'uploadProfilePhoto', dbField: 'profilePhotoLink' },
-    relievingLetter1: { uploadFn: 'uploadRelievingLetter1', dbField: 'relievingLetter1Link' },
-    relievingLetter2: { uploadFn: 'uploadRelievingLetter2', dbField: 'relievingLetter2Link' },
-    pfPassbook: { uploadFn: 'uploadPfPassbook', dbField: 'pfPassbookLink' },
-    previousPayslip1: { uploadFn: 'uploadPreviousPayslip1', dbField: 'previousPayslip1Link' },
-    previousPayslip2: { uploadFn: 'uploadPreviousPayslip2', dbField: 'previousPayslip2Link' },
-    previousPayslip3: { uploadFn: 'uploadPreviousPayslip3', dbField: 'previousPayslip3Link' },
+    resumeDocument:          { uploadFn: 'uploadResume',                 dbField: 'resumeDocumentLink' },
+    visaDocument:            { uploadFn: 'uploadVisaDocument',           dbField: 'visaDocumentLink' },
+    profilePhoto:            { uploadFn: 'uploadProfilePhoto',           dbField: 'profilePhotoLink' },
+    relievingLetter1:        { uploadFn: 'uploadRelievingLetter1',       dbField: 'relievingLetter1Link' },
+    relievingLetter2:        { uploadFn: 'uploadRelievingLetter2',       dbField: 'relievingLetter2Link' },
+    pfPassbook:              { uploadFn: 'uploadPfPassbook',             dbField: 'pfPassbookLink' },
+    previousPayslip1:        { uploadFn: 'uploadPreviousPayslip1',      dbField: 'previousPayslip1Link' },
+    previousPayslip2:        { uploadFn: 'uploadPreviousPayslip2',      dbField: 'previousPayslip2Link' },
+    previousPayslip3:        { uploadFn: 'uploadPreviousPayslip3',      dbField: 'previousPayslip3Link' },
     higherSchoolCertificate: { uploadFn: 'uploadHigherSchoolCertificate', dbField: 'higherSchoolCertificateLink' },
   };
 
@@ -2075,30 +2070,18 @@ router.put("/:userId", async (req, res) => {
       });
     }
 
-    // Sync assignedCompany and assignedClient to User node if updated
-    if (updateData.assignedCompany !== undefined) {
+    // Also sync assignedCompany to User node if updated
+    const assignedComp = updateData.assignedCompany || updateData.assignedClient;
+    if (assignedComp) {
       try {
         await session.run(
           `MATCH (u:User)
            WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
-           SET u.assignedCompany = $assignedCompany`,
-          { userId, assignedCompany: updateData.assignedCompany }
+           SET u.assignedCompany = $assignedCompany, u.assignedClient = $assignedCompany`,
+          { userId, assignedCompany: assignedComp }
         );
       } catch (userSyncErr) {
         console.error("⚠️ Error syncing assignedCompany to User node:", userSyncErr);
-      }
-    }
-
-    if (updateData.assignedClient !== undefined) {
-      try {
-        await session.run(
-          `MATCH (u:User)
-           WHERE toLower(u.username) = toLower($userId) OR toLower(u.email) = toLower($userId)
-           SET u.assignedClient = $assignedClient`,
-          { userId, assignedClient: updateData.assignedClient }
-        );
-      } catch (userSyncErr) {
-        console.error("⚠️ Error syncing assignedClient to User node:", userSyncErr);
       }
     }
 
@@ -2518,7 +2501,7 @@ router.post("/employee-transfer/:employeeNumber", relievingLetterUpload.single('
       }
     }
 
-    const setQuery = experienceType === 'EXPERIENCED'
+    const setQuery = experienceType === 'EXPERIENCED' 
       ? `SET p.experienceType = $experienceType, p.yearsOfExperience = $yearsOfExperience, p.relievingLetterLink = $link, p.relievingLetterUploadedAt = datetime()`
       : `SET p.experienceType = $experienceType, p.yearsOfExperience = null, p.relievingLetterLink = null, p.relievingLetterUploadedAt = null`;
 
