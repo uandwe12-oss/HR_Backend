@@ -489,10 +489,12 @@ router.put("/status", async (req, res) => {
       'In Progress',
       'Pending Screening',
       'Pending Interview',
+      
       'Pending Client Screening',
       'Pending Client Interview',
       'Pending Offer',
-      'Pending Joinee'
+      'Pending Joinee',
+      'Interview Select',
     ];
 
     const isInProgress = pendingStatuses.includes(status);
@@ -784,6 +786,7 @@ router.put("/status-with-zone", async (req, res) => {
       'In Progress',
       'Pending Screening',
       'Pending Interview',
+      'Interview Select',
       'Pending Client Screening',
       'Pending Client Interview',
       'Pending Offer',
