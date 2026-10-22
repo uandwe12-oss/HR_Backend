@@ -1254,6 +1254,7 @@ router.post("/", upload.single('resume'), async (req, res) => {
 
 
   const session = driver.session();
+  
 
   try {
     // Validation
@@ -1538,10 +1539,12 @@ router.post("/progress/batch", async (req, res) => {
       'In Progress',
       'Pending Screening',
       'Pending Interview',
+     
       'Pending Client Screening',
       'Pending Client Interview',
       'Pending Offer',
-      'Pending Joinee'
+      'Pending Joinee',
+       'Interview Select',
     ];
 
     // OPTIMIZED BATCH QUERIES
