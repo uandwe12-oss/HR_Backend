@@ -5,7 +5,7 @@ const bcrypt = require("bcrypt");
 // Import the shared driver helper
 const getDriver = require("../lib/neo4j");
 
-const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", "Employee", "HR", "Sales", "Finance", "Pending", "Rejected"];
+const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", "UANDWE Interviewer", "Employee", "HR", "Sales", "Finance", "Pending", "Rejected"];
 
 /**
  * =================================================
@@ -14,13 +14,13 @@ const VALID_ROLES = ["Admin", "Recruiter", "Interviewer", "Client Interviewer", 
  */
 router.get("/", async (req, res) => {
   // console.log("\n📡 GET /api/users - Fetching all users");
-  
+
   const driver = getDriver();
   const session = driver.session();
 
   try {
     // console.log("🔍 Executing Neo4j query...");
-    
+
     const result = await session.run(
       `MATCH (u:User)
        OPTIONAL MATCH (p:PersonalDetails) WHERE toLower(p.userId) = toLower(u.username)
@@ -64,19 +64,33 @@ router.get("/", async (req, res) => {
       const assignedCompany = cleanVal(rawPersComp) || cleanVal(rawUserComp) || null;
       const rawClient = cleanVal(rawUserClient) || cleanVal(rawPersClient) || null;
 
-      const CLIENT_ROLES = ["Interviewer", "Client Interviewer", "Sales", "Recruiter"];
+      const CLIENT_ROLES = ["Interviewer", "Client Interviewer", "Sales", "UANDWE Interviewer"];
       const rolesArray = Array.isArray(role) ? role : [role];
       const hasClientRole = rolesArray.some(r => CLIENT_ROLES.includes(r));
 
       const isCompanyVal = (val) => {
         if (!val || typeof val !== 'string') return false;
         const s = val.trim().toLowerCase();
+        // Specifically filter out known internal company branches, NOT clients like "Microchip"
+        if (
+          s === 'bangaloreuandwe' ||
+          s === 'bangalore uandwe' ||
+          s === 'bangaloreuandwelabs' ||
+          s === 'bangalore uandwe labs' ||
+          s === 'shanghainvidia' ||
+          s === 'shanghai nvidia' ||
+          s === 'uandweshanghai' ||
+          s === 'uandwe shanghai' ||
+          s === 'bangaloremicrochip' ||
+          s === 'bangalore microchip'
+        ) {
+          return true;
+        }
         return (
-          s.startsWith('bangalore') ||
-          s.startsWith('shanghai') ||
+          s.startsWith('bangalore uandwe') ||
+          s.startsWith('shanghai nvidia') ||
           s.includes('uandwe') ||
-          s.includes('microchip') ||
-          s === (assignedCompany || '').trim().toLowerCase()
+          (assignedCompany && s === assignedCompany.trim().toLowerCase() && s !== 'microchip')
         );
       };
 
@@ -128,10 +142,10 @@ router.get("/", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error fetching users:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to fetch users",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -146,10 +160,10 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   // console.log("\n📡 POST /api/users - Creating new user");
   // console.log("Request body:", { ...req.body, password: "[HIDDEN]" });
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const { username, password, role, assignedClient } = req.body; // Remove assignedCompany
 
@@ -157,9 +171,9 @@ router.post("/", async (req, res) => {
 
     // Validation
     if (!username || !password || roles.length === 0) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Username, password and role are required" 
+        message: "Username, password and role are required"
       });
     }
 
@@ -171,9 +185,9 @@ router.post("/", async (req, res) => {
 
     if (checkResult.records.length > 0) {
       console.log(`❌ Username already exists: ${username}`);
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Username already exists" 
+        message: "Username already exists"
       });
     }
 
@@ -193,8 +207,8 @@ router.post("/", async (req, res) => {
     const clientList = Array.isArray(assignedClient)
       ? assignedClient.filter(c => typeof c === 'string' && c.trim() !== '').map(c => c.trim())
       : (assignedClient && typeof assignedClient === 'string' && assignedClient.trim() !== ''
-          ? assignedClient.split(',').map(s => s.trim()).filter(Boolean)
-          : []);
+        ? assignedClient.split(',').map(s => s.trim()).filter(Boolean)
+        : []);
 
     if (needsClient && clientList.length === 0) {
       return res.status(400).json({
@@ -270,10 +284,10 @@ router.post("/", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error creating user:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to create user",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -287,10 +301,10 @@ router.post("/", async (req, res) => {
  */
 router.post("/login", async (req, res) => {
   // console.log("\n📡 POST /api/users/login - User login");
-  
+
   const driver = getDriver();
   const session = driver.session();
-  
+
   try {
     const { username, password } = req.body;
 
@@ -351,19 +365,33 @@ router.post("/login", async (req, res) => {
     const assignedCompany = cleanVal(rawPersComp) || cleanVal(rawUserComp) || null;
     const rawClient = cleanVal(rawUserClient) || cleanVal(rawPersClient) || null;
 
-    const CLIENT_ROLES = ["Interviewer", "Client Interviewer", "Sales", "Recruiter"];
+    const CLIENT_ROLES = ["Interviewer", "Client Interviewer", "Sales", "UANDWE Interviewer"];
     const rolesArray = Array.isArray(role) ? role : [role];
     const hasClientRole = rolesArray.some(r => CLIENT_ROLES.includes(r));
 
     const isCompanyVal = (val) => {
       if (!val || typeof val !== 'string') return false;
       const s = val.trim().toLowerCase();
+      // Specifically filter out known internal company branches, NOT clients like "Microchip"
+      if (
+        s === 'bangaloreuandwe' ||
+        s === 'bangalore uandwe' ||
+        s === 'bangaloreuandwelabs' ||
+        s === 'bangalore uandwe labs' ||
+        s === 'shanghainvidia' ||
+        s === 'shanghai nvidia' ||
+        s === 'uandweshanghai' ||
+        s === 'uandwe shanghai' ||
+        s === 'bangaloremicrochip' ||
+        s === 'bangalore microchip'
+      ) {
+        return true;
+      }
       return (
-        s.startsWith('bangalore') ||
-        s.startsWith('shanghai') ||
+        s.startsWith('bangalore uandwe') ||
+        s.startsWith('shanghai nvidia') ||
         s.includes('uandwe') ||
-        s.includes('microchip') ||
-        s === (assignedCompany || '').trim().toLowerCase()
+        (assignedCompany && s === assignedCompany.trim().toLowerCase() && s !== 'microchip')
       );
     };
 
@@ -379,7 +407,7 @@ router.post("/login", async (req, res) => {
 
     // Verify password
     const isValidPassword = await bcrypt.compare(password, passwordHash);
-    
+
     if (!isValidPassword) {
       console.log(`❌ Login failed: Invalid password for ${username}`);
       return res.status(401).json({
@@ -421,7 +449,7 @@ router.post("/login", async (req, res) => {
  */
 router.put("/:username/pid", async (req, res) => {
   // console.log(`\n📡 PUT /api/users/${req.params.username}/pid - Updating PID`);
-  
+
   const driver = getDriver();
   const session = driver.session();
   const { username } = req.params;
@@ -446,9 +474,9 @@ router.put("/:username/pid", async (req, res) => {
 
     if (!checkResult.records.length) {
       console.log(`❌ User ${username} not found`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "User not found" 
+        message: "User not found"
       });
     }
 
@@ -458,7 +486,7 @@ router.put("/:username/pid", async (req, res) => {
        SET u.pid = $pid`,
       { username, pid }
     );
-    
+
     // Fetch updated user data
     const result = await session.run(
       `
@@ -498,10 +526,10 @@ router.put("/:username/pid", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error updating PID:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to update PID",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -515,7 +543,7 @@ router.put("/:username/pid", async (req, res) => {
  */
 router.put("/:username", async (req, res) => {
   // console.log(`\n📡 PUT /api/users/${req.params.username} - Updating user`);
-  
+
   const driver = getDriver();
   const session = driver.session();
   const { username } = req.params;
@@ -530,9 +558,9 @@ router.put("/:username", async (req, res) => {
     let roles = Array.isArray(role) ? role : [role];
 
     if (roles.length === 0) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Role is required" 
+        message: "Role is required"
       });
     }
 
@@ -544,12 +572,12 @@ router.put("/:username", async (req, res) => {
       });
     }
 
-    const needsClient = roles.some(r => ["Interviewer", "Client Interviewer", "Sales"].includes(r));
+    const needsClient = roles.some(r => ["Interviewer", "Client Interviewer", "Sales", "UANDWE Interviewer"].includes(r));
     const clientList = Array.isArray(assignedClient)
       ? assignedClient.filter(c => typeof c === 'string' && c.trim() !== '').map(c => c.trim())
       : (assignedClient && typeof assignedClient === 'string' && assignedClient.trim() !== ''
-          ? assignedClient.split(',').map(s => s.trim()).filter(Boolean)
-          : []);
+        ? assignedClient.split(',').map(s => s.trim()).filter(Boolean)
+        : []);
 
     // Role-specific validation
     if (needsClient && clientList.length === 0) {
@@ -559,23 +587,25 @@ router.put("/:username", async (req, res) => {
       });
     }
 
-    // Check if user exists
+    // Check if user exists (case-insensitive)
     const checkResult = await session.run(
-      "MATCH (u:User {username: $username}) RETURN u",
+      "MATCH (u:User) WHERE toLower(trim(u.username)) = toLower(trim($username)) RETURN u.username as actualUsername",
       { username }
     );
 
     if (!checkResult.records.length) {
       console.log(`❌ User ${username} not found`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "User not found" 
+        message: "User not found"
       });
     }
 
+    const targetUsername = checkResult.records[0].get("actualUsername") || username;
+
     // Build dynamic update query
-    let updateQuery = `MATCH (u:User {username: $username}) SET u.role = $role`;
-    const params = { username, role: roles };
+    let updateQuery = `MATCH (u:User {username: $targetUsername}) SET u.role = $role`;
+    const params = { targetUsername, role: roles };
 
     // Handle assignedClient for Interviewer, Client Interviewer, and Sales
     if (needsClient) {
@@ -584,11 +614,15 @@ router.put("/:username", async (req, res) => {
         params.assignedClient = clientList;
       } else {
         updateQuery += `, u.assignedClient = null`;
+        params.assignedClient = null;
       }
     } else if (assignedClient !== undefined) {
       if (clientList.length > 0) {
         updateQuery += `, u.assignedClient = $assignedClient`;
         params.assignedClient = clientList;
+      } else {
+        updateQuery += `, u.assignedClient = null`;
+        params.assignedClient = null;
       }
     }
 
@@ -604,7 +638,7 @@ router.put("/:username", async (req, res) => {
         updateQuery += ` REMOVE u.assignedCompany`;
       }
     }
-    
+
     // Execute update
     await session.run(updateQuery, params);
 
@@ -613,19 +647,33 @@ router.put("/:username", async (req, res) => {
       try {
         await session.run(
           `MATCH (p:PersonalDetails)
-           WHERE toLower(p.userId) = toLower($username) OR toLower(p.emailId) = toLower($username)
-           SET p.assignedCompany = $assignedCompany, p.assignedClient = $assignedCompany`,
-          { username, assignedCompany: params.assignedCompany }
+           WHERE toLower(trim(p.userId)) = toLower(trim($targetUsername)) OR toLower(trim(p.emailId)) = toLower(trim($targetUsername))
+           SET p.assignedCompany = $assignedCompany`,
+          { targetUsername, assignedCompany: params.assignedCompany }
         );
       } catch (pErr) {
         console.error("Error syncing assignedCompany to PersonalDetails:", pErr);
       }
     }
-    
+
+    // Sync assignedClient to PersonalDetails node if updated
+    if (params.assignedClient !== undefined) {
+      try {
+        await session.run(
+          `MATCH (p:PersonalDetails)
+           WHERE toLower(trim(p.userId)) = toLower(trim($targetUsername)) OR toLower(trim(p.emailId)) = toLower(trim($targetUsername))
+           SET p.assignedClient = $assignedClient`,
+          { targetUsername, assignedClient: params.assignedClient }
+        );
+      } catch (pErr) {
+        console.error("Error syncing assignedClient to PersonalDetails:", pErr);
+      }
+    }
+
     // Fetch updated user data
     const result = await session.run(
       `
-      MATCH (u:User {username: $username})
+      MATCH (u:User {username: $targetUsername})
       RETURN u.username as username, 
              u.role as role, 
              u.assignedClient as assignedClient,
@@ -633,7 +681,7 @@ router.put("/:username", async (req, res) => {
              u.pid as pid,
              u.createdAt as createdAt
       `,
-      { username }
+      { targetUsername }
     );
 
     const updatedUser = result.records[0];
@@ -664,10 +712,10 @@ router.put("/:username", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error updating user:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to update user",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
@@ -681,7 +729,7 @@ router.put("/:username", async (req, res) => {
  */
 router.delete("/:username", async (req, res) => {
   // console.log(`\n📡 DELETE /api/users/${req.params.username} - Deleting user`);
-  
+
   const driver = getDriver();
   const session = driver.session();
   const { username } = req.params;
@@ -697,9 +745,9 @@ router.delete("/:username", async (req, res) => {
 
     if (!checkResult.records.length) {
       console.log(`❌ User ${username} not found`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "User not found" 
+        message: "User not found"
       });
     }
 
@@ -720,10 +768,10 @@ router.delete("/:username", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error deleting user:", err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to delete user",
-      error: err.message 
+      error: err.message
     });
   } finally {
     await session.close();
