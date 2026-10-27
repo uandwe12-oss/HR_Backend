@@ -44,7 +44,7 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}, targetYear = n
         wfhUsed += days;
         if (isThisMonth) monthlyWFH += days;
       } else if (isThisYear) {
-        if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') {
+        if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave' || leave.leaveType === 'Half Day Leave') {
           rawAnnualUsed += days;
           if (isThisMonth) monthlyRawAL += days;
         } else if (leave.leaveType === 'Sick Leave') {
@@ -52,7 +52,7 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}, targetYear = n
         }
       }
     } else if (leave.status === 'Pending' && isThisYear) {
-      if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave') {
+      if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Leave' || leave.leaveType === 'Half Day Leave') {
         pendingAnnual += days;
       } else if (leave.leaveType === 'Sick Leave') {
         pendingSick += days;
@@ -70,34 +70,40 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}, targetYear = n
   // Reciprocal Overflow Logic (Applies to all)
   
   // 1. Annual overflows into Sick
-  if (rawAnnualUsed > annualEntitlement) {
-    const overflow = rawAnnualUsed - annualEntitlement;
-    const sickAvailableForOverflow = sickEntitlement - rawSickUsed;
-    if (overflow <= sickAvailableForOverflow && sickAvailableForOverflow > 0) {
-      rawSickUsed += overflow;
-      rawAnnualUsed = annualEntitlement;
-    } else if (sickAvailableForOverflow > 0) {
-      rawSickUsed += sickAvailableForOverflow;
-      rawAnnualUsed = rawAnnualUsed - sickAvailableForOverflow;
+  if (totalAnnualUsed > annualEntitlement) {
+    const annualOverflow = totalAnnualUsed - annualEntitlement;
+    const sickAvailable = Math.max(0, sickEntitlement - totalSickUsed);
+    if (sickAvailable > 0) {
+      const absorbed = Math.min(annualOverflow, sickAvailable);
+      totalSickUsed += absorbed;
+      totalAnnualUsed -= absorbed;
+      
+      const rawAbsorbed = Math.min(Math.max(0, rawAnnualUsed - annualEntitlement), Math.max(0, sickEntitlement - rawSickUsed));
+      if (rawAbsorbed > 0) {
+        rawSickUsed += rawAbsorbed;
+        rawAnnualUsed -= rawAbsorbed;
+      }
     }
-    totalSickUsed = rawSickUsed + pendingSick;
-    totalAnnualUsed = rawAnnualUsed + pendingAnnual;
   }
   
   // 2. Sick overflows into Annual
   if (totalSickUsed > sickEntitlement) {
     const sickOverflow = totalSickUsed - sickEntitlement;
-    totalAnnualUsed += sickOverflow;
-    totalSickUsed = sickEntitlement;
+    const annualAvailable = Math.max(0, annualEntitlement - totalAnnualUsed);
+    if (annualAvailable > 0) {
+      const absorbed = Math.min(sickOverflow, annualAvailable);
+      totalAnnualUsed += absorbed;
+      totalSickUsed -= absorbed;
 
-    if (rawSickUsed > sickEntitlement) {
-      const rawSickOverflow = rawSickUsed - sickEntitlement;
-      rawAnnualUsed += rawSickOverflow;
-      rawSickUsed = sickEntitlement;
+      const rawAbsorbed = Math.min(Math.max(0, rawSickUsed - sickEntitlement), Math.max(0, annualEntitlement - rawAnnualUsed));
+      if (rawAbsorbed > 0) {
+        rawAnnualUsed += rawAbsorbed;
+        rawSickUsed -= rawAbsorbed;
+      }
     }
   }
 
-  const annualUsed = Math.min(rawAnnualUsed, annualEntitlement);
+  const annualUsed = rawAnnualUsed;
   const lopUsed = Math.max(0, rawAnnualUsed - annualEntitlement) + Math.max(0, rawSickUsed - sickEntitlement);
   
   // WFH Monthly LOP
@@ -112,8 +118,8 @@ const calculateBalances = (leaves, nationality, priorLeaves = {}, targetYear = n
   const monthlyLOP = Math.max(0, lopUsed - lopBeforeThisMonth) + wfhLop;
   const monthlyAL = monthlyRawAL - Math.max(0, lopUsed - lopBeforeThisMonth);
   
-  const annualBalance = Math.max(0, annualEntitlement - totalAnnualUsed);
-  const sickBalance = Math.max(0, sickEntitlement - totalSickUsed);
+  const annualBalance = annualEntitlement - totalAnnualUsed;
+  const sickBalance = sickEntitlement - totalSickUsed;
 
   return {
     annualEntitlement,
@@ -346,24 +352,34 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
     }
 
     const requestedTotal = parseFloat(totalDays);
-    const isHalfDay = startDate === endDate && requestedTotal === 0.5;
+    const isHalfDay = leaveType === 'Half Day Leave' || (startDate === endDate && requestedTotal === 0.5);
     const daysRequested = isHalfDay ? 0.5 : (calculatedWorkingDays > 0 ? calculatedWorkingDays : (requestedTotal || 0));
     
     let annualLeaveDays = daysRequested;
     let lopDays = 0;
     
-    if (leaveType === 'Annual Leave' || leaveType === 'Leave') {
-      const currentBalance = Math.max(0, balances.annualBalance);
-      if (daysRequested > currentBalance) {
-        annualLeaveDays = currentBalance;
-        lopDays = daysRequested - currentBalance;
+    if (leaveType === 'Annual Leave' || leaveType === 'Leave' || leaveType === 'Half Day Leave') {
+      const currentAnnualBalance = Math.max(0, balances.annualBalance);
+      const currentSickBalance = Math.max(0, balances.sickBalance);
+      
+      if (daysRequested > currentAnnualBalance) {
+        annualLeaveDays = currentAnnualBalance;
+        const excessAnnual = daysRequested - currentAnnualBalance;
+        if (excessAnnual > currentSickBalance) {
+          lopDays = excessAnnual - currentSickBalance;
+        } else {
+          lopDays = 0;
+        }
+      } else {
+        annualLeaveDays = daysRequested;
+        lopDays = 0;
       }
     } else if (leaveType === 'Sick Leave') {
       const currentSickBalance = Math.max(0, balances.sickBalance);
+      const currentAnnualBalance = Math.max(0, balances.annualBalance);
+      
       if (daysRequested > currentSickBalance) {
         const excessSick = daysRequested - currentSickBalance;
-        const currentAnnualBalance = Math.max(0, balances.annualBalance);
-        
         if (excessSick > currentAnnualBalance) {
           lopDays = excessSick - currentAnnualBalance;
           annualLeaveDays = currentAnnualBalance;
@@ -373,6 +389,7 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
         }
       } else {
         annualLeaveDays = 0;
+        lopDays = 0;
       }
     }
     
