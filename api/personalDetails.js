@@ -865,7 +865,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload Aadhar document to Google Drive
-    let aadharDocumentLink = null;
+    let aadharDocumentLink = req.body.aadharDocumentLink || null;
     if (aadharDocumentFile) {
       const uploadResult = await googleDrive.uploadAadharImage(
         aadharDocumentFile.buffer,
@@ -886,7 +886,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload National ID document to Google Drive
-    let nationalIdDocumentLink = null;
+    let nationalIdDocumentLink = req.body.nationalIdDocumentLink || null;
     if (nationalIdDocFile) {
       const uploadResult = await googleDrive.uploadNationalIdDocument(
         nationalIdDocFile.buffer,
@@ -906,7 +906,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload Higher School Certificate to Google Drive
-    let higherSchoolCertificateLink = null;
+    let higherSchoolCertificateLink = req.body.higherSchoolCertificateLink || null;
     if (higherSchoolCertFile) {
       const uploadResult = await googleDrive.uploadHigherSchoolCertificate(
         higherSchoolCertFile.buffer,
@@ -926,7 +926,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload SSN document to Google Drive
-    let ssnDocumentLink = null;
+    let ssnDocumentLink = req.body.ssnDocumentLink || null;
     if (ssnDocFile) {
       const uploadResult = await googleDrive.uploadSsnDocument(
         ssnDocFile.buffer,
@@ -946,7 +946,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload PAN document to Google Drive
-    let panLink = null;
+    let panLink = req.body.panDocumentLink || null;
     if (panFile) {
       const uploadResult = await googleDrive.uploadPanImage(
         panFile.buffer,
@@ -970,7 +970,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload 10th Certificate to Google Drive
-    let tenthCertificateLink = null;
+    let tenthCertificateLink = req.body.tenthCertificateLink || null;
     if (tenthCertFile) {
       const uploadResult = await googleDrive.uploadTenthCertificate(
         tenthCertFile.buffer, tenthCertFile.originalname, tenthCertFile.mimetype, userId
@@ -983,7 +983,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload 12th Certificate to Google Drive
-    let twelfthCertificateLink = null;
+    let twelfthCertificateLink = req.body.twelfthCertificateLink || null;
     if (twelfthCertFile) {
       const uploadResult = await googleDrive.uploadTwelfthCertificate(
         twelfthCertFile.buffer, twelfthCertFile.originalname, twelfthCertFile.mimetype, userId
@@ -996,7 +996,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload Resume to Google Drive
-    let resumeDocumentLink = null;
+    let resumeDocumentLink = req.body.resumeDocumentLink || null;
     if (resumeFile) {
       const uploadResult = await googleDrive.uploadResume(
         resumeFile.buffer, resumeFile.originalname, resumeFile.mimetype, userId
@@ -1009,7 +1009,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload Visa Document to Google Drive
-    let visaDocumentLink = null;
+    let visaDocumentLink = req.body.visaDocumentLink || null;
     if (visaDocFile) {
       const uploadResult = await googleDrive.uploadVisaDocument(
         visaDocFile.buffer, visaDocFile.originalname, visaDocFile.mimetype, userId
@@ -1022,7 +1022,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload Profile Photo to Google Drive
-    let profilePhotoLink = null;
+    let profilePhotoLink = req.body.profilePhotoLink || null;
     if (profilePhotoFile) {
       const uploadResult = await googleDrive.uploadProfilePhoto(
         profilePhotoFile.buffer, profilePhotoFile.originalname, profilePhotoFile.mimetype, userId
@@ -1035,7 +1035,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload Graduation Certificate to Google Drive
-    let graduationCertificateLink = null;
+    let graduationCertificateLink = req.body.graduationCertificateLink || null;
     if (graduationCertFile) {
       const uploadResult = await googleDrive.uploadGraduationCertificate(
         graduationCertFile.buffer, graduationCertFile.originalname, graduationCertFile.mimetype, userId
@@ -1048,7 +1048,7 @@ router.post("/", (req, res, next) => {
     }
 
     // Upload Post Graduation Certificate to Google Drive
-    let postGraduationCertificateLink = null;
+    let postGraduationCertificateLink = req.body.postGraduationCertificateLink || null;
     if (postGraduationCertFile) {
       const uploadResult = await googleDrive.uploadPostGraduationCertificate(
         postGraduationCertFile.buffer, postGraduationCertFile.originalname, postGraduationCertFile.mimetype, userId
@@ -1060,7 +1060,7 @@ router.post("/", (req, res, next) => {
       }
     }
 
-    let relievingLetter1Link = null;
+    let relievingLetter1Link = req.body.relievingLetter1Link || null;
     if (relievingLetter1File) {
       const uploadResult = await googleDrive.uploadRelievingLetter1(
         relievingLetter1File.buffer, relievingLetter1File.originalname, relievingLetter1File.mimetype, userId
@@ -1070,7 +1070,7 @@ router.post("/", (req, res, next) => {
       }
     }
 
-    let relievingLetter2Link = null;
+    let relievingLetter2Link = req.body.relievingLetter2Link || null;
     if (relievingLetter2File) {
       const uploadResult = await googleDrive.uploadRelievingLetter2(
         relievingLetter2File.buffer, relievingLetter2File.originalname, relievingLetter2File.mimetype, userId
@@ -1080,7 +1080,7 @@ router.post("/", (req, res, next) => {
       }
     }
 
-    let pfPassbookLink = null;
+    let pfPassbookLink = req.body.pfPassbookLink || null;
     if (pfPassbookFile) {
       const uploadResult = await googleDrive.uploadPfPassbook(
         pfPassbookFile.buffer, pfPassbookFile.originalname, pfPassbookFile.mimetype, userId
@@ -1090,7 +1090,7 @@ router.post("/", (req, res, next) => {
       }
     }
 
-    let previousPayslip1Link = null;
+    let previousPayslip1Link = req.body.previousPayslip1Link || null;
     if (previousPayslip1File) {
       const uploadResult = await googleDrive.uploadPreviousPayslip1(
         previousPayslip1File.buffer, previousPayslip1File.originalname, previousPayslip1File.mimetype, userId
@@ -1100,7 +1100,7 @@ router.post("/", (req, res, next) => {
       }
     }
 
-    let previousPayslip2Link = null;
+    let previousPayslip2Link = req.body.previousPayslip2Link || null;
     if (previousPayslip2File) {
       const uploadResult = await googleDrive.uploadPreviousPayslip2(
         previousPayslip2File.buffer, previousPayslip2File.originalname, previousPayslip2File.mimetype, userId
@@ -1110,7 +1110,7 @@ router.post("/", (req, res, next) => {
       }
     }
 
-    let previousPayslip3Link = null;
+    let previousPayslip3Link = req.body.previousPayslip3Link || null;
     if (previousPayslip3File) {
       const uploadResult = await googleDrive.uploadPreviousPayslip3(
         previousPayslip3File.buffer, previousPayslip3File.originalname, previousPayslip3File.mimetype, userId
