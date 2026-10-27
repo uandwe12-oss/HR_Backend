@@ -128,13 +128,15 @@ router.post("/admin/upload", upload.single('payslip'), async (req, res) => {
       const leaveYear = leaveDate.getFullYear().toString();
 
       if (leaveMonth === month && leaveYear === year.toString()) {
-        const actualDays = leave.actualUsedDays !== undefined && leave.actualUsedDays !== null ? leave.actualUsedDays : (leave.totalDays || leave.numberOfDays || 0);
+        const actualDays = parseFloat(leave.actualUsedDays !== undefined && leave.actualUsedDays !== null ? leave.actualUsedDays : (leave.totalDays || leave.numberOfDays || 0)) || 0;
         if (leave.isLOP) {
-          totalLopDays += (leave.lopDays || actualDays || 0);
-          totalLopPercentage += (leave.salaryDeductionPercentage || 0);
-          deductionReasons.push(`${leave.lopDays || actualDays || 0} days LOP (${leave.reason || 'Leave'})`);
+          const lDays = parseFloat(leave.lopDays !== undefined && leave.lopDays !== null ? leave.lopDays : actualDays) || 0;
+          totalLopDays += lDays;
+          totalLopPercentage += (parseFloat(leave.salaryDeductionPercentage) || 0);
+          deductionReasons.push(`${lDays} days LOP (${leave.reason || 'Leave'})`);
         } else {
-          totalAnnualLeave += (leave.annualLeaveDays || actualDays || 0);
+          const aDays = parseFloat(leave.annualLeaveDays !== undefined && leave.annualLeaveDays !== null ? leave.annualLeaveDays : actualDays) || 0;
+          totalAnnualLeave += aDays;
         }
       }
     });
