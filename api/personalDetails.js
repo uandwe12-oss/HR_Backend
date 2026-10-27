@@ -67,7 +67,7 @@ router.get("/validate-unique", async (req, res) => {
     `;
 
     const result = await session.run(query, params);
-    
+
     let errors = {};
     if (result.records.length > 0) {
       for (const record of result.records) {
@@ -164,9 +164,9 @@ router.get("/birthdays", async (req, res) => {
         ) {
           nextBirthdayYear++;
         }
-        
+
         const nextBirthday = new Date(nextBirthdayYear, dobMonth, dobDate);
-        
+
         // Calculate days remaining without time component to avoid timezone issues
         const diffTime = nextBirthday.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
         const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -510,21 +510,154 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/draft", async (req, res) => {
+router.post("/draft", (req, res, next) => {
+  if (req.is && req.is('multipart/form-data')) {
+    const uploadMiddleware = upload.fields([
+      { name: 'aadharDocument', maxCount: 1 },
+      { name: 'panDocument', maxCount: 1 },
+      { name: 'nationalIdDocument', maxCount: 1 },
+      { name: 'higherSchoolCertificate', maxCount: 1 },
+      { name: 'tenthCertificate', maxCount: 1 },
+      { name: 'twelfthCertificate', maxCount: 1 },
+      { name: 'resumeDocument', maxCount: 1 },
+      { name: 'visaDocument', maxCount: 1 },
+      { name: 'profilePhoto', maxCount: 1 },
+      { name: 'graduationCertificate', maxCount: 1 },
+      { name: 'postGraduationCertificate', maxCount: 1 },
+      { name: 'relievingLetter1', maxCount: 1 },
+      { name: 'relievingLetter2', maxCount: 1 },
+      { name: 'pfPassbook', maxCount: 1 },
+      { name: 'ssnDocument', maxCount: 1 },
+      { name: 'previousPayslip1', maxCount: 1 },
+      { name: 'previousPayslip2', maxCount: 1 },
+      { name: 'previousPayslip3', maxCount: 1 }
+    ]);
+    return uploadMiddleware(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      next();
+    });
+  }
+  next();
+}, async (req, res) => {
   const driver = getDriver();
   if (!driver) return res.status(500).json({ success: false, message: "No db connection" });
   const session = driver.session();
   try {
-    const { userId, draftData } = req.body;
+    let userId = req.body.userId;
+    let draftData = req.body.draftData;
+
+    if (typeof draftData === 'string') {
+      try { draftData = JSON.parse(draftData); } catch (e) {}
+    }
+
+    if (!draftData) {
+      draftData = { formData: { ...req.body }, skills: [] };
+      if (req.body.skills) {
+        try {
+          draftData.skills = typeof req.body.skills === 'string' ? JSON.parse(req.body.skills) : req.body.skills;
+        } catch (e) {
+          draftData.skills = Array.isArray(req.body.skills) ? req.body.skills : [];
+        }
+      }
+    }
+
+    if (!draftData.formData) draftData.formData = {};
+
+    if (!userId) {
+      userId = draftData.formData?.userId || draftData.formData?.username;
+    }
     if (!userId) {
       return res.status(400).json({ success: false, message: "userId is required" });
     }
+
+    // Upload any attached files to Google Drive and update draftData.formData links
+    const files = req.files || {};
+    try {
+      if (files.aadharDocument?.[0]) {
+        const up = await googleDrive.uploadAadharImage(files.aadharDocument[0].buffer, files.aadharDocument[0].originalname, files.aadharDocument[0].mimetype, userId, 'document');
+        if (up.success) draftData.formData.aadharDocumentLink = up.viewLink;
+      }
+      if (files.panDocument?.[0]) {
+        const up = await googleDrive.uploadPanImage(files.panDocument[0].buffer, files.panDocument[0].originalname, files.panDocument[0].mimetype, userId);
+        if (up.success) draftData.formData.panDocumentLink = up.viewLink;
+      }
+      if (files.nationalIdDocument?.[0]) {
+        const up = await googleDrive.uploadNationalIdDocument(files.nationalIdDocument[0].buffer, files.nationalIdDocument[0].originalname, files.nationalIdDocument[0].mimetype, userId);
+        if (up.success) draftData.formData.nationalIdDocumentLink = up.viewLink;
+      }
+      if (files.ssnDocument?.[0]) {
+        const up = await googleDrive.uploadSsnDocument(files.ssnDocument[0].buffer, files.ssnDocument[0].originalname, files.ssnDocument[0].mimetype, userId);
+        if (up.success) draftData.formData.ssnDocumentLink = up.viewLink;
+      }
+      if (files.higherSchoolCertificate?.[0]) {
+        const up = await googleDrive.uploadHigherSchoolCertificate(files.higherSchoolCertificate[0].buffer, files.higherSchoolCertificate[0].originalname, files.higherSchoolCertificate[0].mimetype, userId);
+        if (up.success) draftData.formData.higherSchoolCertificateLink = up.viewLink;
+      }
+      if (files.tenthCertificate?.[0]) {
+        const up = await googleDrive.uploadTenthCertificate(files.tenthCertificate[0].buffer, files.tenthCertificate[0].originalname, files.tenthCertificate[0].mimetype, userId);
+        if (up.success) draftData.formData.tenthCertificateLink = up.viewLink;
+      }
+      if (files.twelfthCertificate?.[0]) {
+        const up = await googleDrive.uploadTwelfthCertificate(files.twelfthCertificate[0].buffer, files.twelfthCertificate[0].originalname, files.twelfthCertificate[0].mimetype, userId);
+        if (up.success) draftData.formData.twelfthCertificateLink = up.viewLink;
+      }
+      if (files.resumeDocument?.[0]) {
+        const up = await googleDrive.uploadResume(files.resumeDocument[0].buffer, files.resumeDocument[0].originalname, files.resumeDocument[0].mimetype, userId);
+        if (up.success) draftData.formData.resumeDocumentLink = up.viewLink;
+      }
+      if (files.visaDocument?.[0]) {
+        const up = await googleDrive.uploadVisaDocument(files.visaDocument[0].buffer, files.visaDocument[0].originalname, files.visaDocument[0].mimetype, userId);
+        if (up.success) draftData.formData.visaDocumentLink = up.viewLink;
+      }
+      if (files.profilePhoto?.[0]) {
+        const up = await googleDrive.uploadProfilePhoto(files.profilePhoto[0].buffer, files.profilePhoto[0].originalname, files.profilePhoto[0].mimetype, userId);
+        if (up.success) draftData.formData.profilePhotoLink = up.viewLink;
+      }
+      if (files.graduationCertificate?.[0]) {
+        const up = await googleDrive.uploadGraduationCertificate(files.graduationCertificate[0].buffer, files.graduationCertificate[0].originalname, files.graduationCertificate[0].mimetype, userId);
+        if (up.success) draftData.formData.graduationCertificateLink = up.viewLink;
+      }
+      if (files.postGraduationCertificate?.[0]) {
+        const up = await googleDrive.uploadPostGraduationCertificate(files.postGraduationCertificate[0].buffer, files.postGraduationCertificate[0].originalname, files.postGraduationCertificate[0].mimetype, userId);
+        if (up.success) draftData.formData.postGraduationCertificateLink = up.viewLink;
+      }
+      if (files.relievingLetter1?.[0]) {
+        const up = await googleDrive.uploadRelievingLetter1(files.relievingLetter1[0].buffer, files.relievingLetter1[0].originalname, files.relievingLetter1[0].mimetype, userId);
+        if (up.success) draftData.formData.relievingLetter1Link = up.viewLink;
+      }
+      if (files.relievingLetter2?.[0]) {
+        const up = await googleDrive.uploadRelievingLetter2(files.relievingLetter2[0].buffer, files.relievingLetter2[0].originalname, files.relievingLetter2[0].mimetype, userId);
+        if (up.success) draftData.formData.relievingLetter2Link = up.viewLink;
+      }
+      if (files.pfPassbook?.[0]) {
+        const up = await googleDrive.uploadPfPassbook(files.pfPassbook[0].buffer, files.pfPassbook[0].originalname, files.pfPassbook[0].mimetype, userId);
+        if (up.success) draftData.formData.pfPassbookLink = up.viewLink;
+      }
+      if (files.previousPayslip1?.[0]) {
+        const up = await googleDrive.uploadPreviousPayslip1(files.previousPayslip1[0].buffer, files.previousPayslip1[0].originalname, files.previousPayslip1[0].mimetype, userId);
+        if (up.success) draftData.formData.previousPayslip1Link = up.viewLink;
+      }
+      if (files.previousPayslip2?.[0]) {
+        const up = await googleDrive.uploadPreviousPayslip2(files.previousPayslip2[0].buffer, files.previousPayslip2[0].originalname, files.previousPayslip2[0].mimetype, userId);
+        if (up.success) draftData.formData.previousPayslip2Link = up.viewLink;
+      }
+      if (files.previousPayslip3?.[0]) {
+        const up = await googleDrive.uploadPreviousPayslip3(files.previousPayslip3[0].buffer, files.previousPayslip3[0].originalname, files.previousPayslip3[0].mimetype, userId);
+        if (up.success) draftData.formData.previousPayslip3Link = up.viewLink;
+      }
+    } catch (uploadErr) {
+      console.warn("⚠️ Warning: Failed to upload some draft files to Drive:", uploadErr);
+    }
+
     const draftString = JSON.stringify(draftData);
     await session.run(`
       MERGE (d:PersonalDetailsDraft {userId: $userId})
       SET d.draftData = $draftString, d.updatedAt = datetime()
     `, { userId, draftString });
-    res.json({ success: true, message: "Draft saved successfully" });
+
+    res.json({ success: true, message: "Draft saved successfully", draftData });
   } catch (error) {
     console.error("Error saving draft:", error);
     res.status(500).json({ success: false, message: "Failed to save draft" });
@@ -540,13 +673,15 @@ router.get("/draft/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const result = await session.run(`
-      MATCH (d:PersonalDetailsDraft {userId: $userId})
+      MATCH (d:PersonalDetailsDraft)
+      WHERE d.userId = $userId OR toLower(d.userId) = toLower($userId)
       RETURN d.draftData AS draftData
     `, { userId });
-    
+
     if (result.records.length > 0) {
-      const draftDataStr = result.records[0].get("draftData");
-      res.json({ success: true, draftData: JSON.parse(draftDataStr) });
+      const rawData = result.records[0].get("draftData");
+      const draftData = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
+      res.json({ success: true, draftData });
     } else {
       res.json({ success: true, draftData: null });
     }
@@ -565,7 +700,8 @@ router.delete("/draft/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     await session.run(`
-      MATCH (d:PersonalDetailsDraft {userId: $userId})
+      MATCH (d:PersonalDetailsDraft)
+      WHERE d.userId = $userId OR toLower(d.userId) = toLower($userId)
       DETACH DELETE d
     `, { userId });
     res.json({ success: true, message: "Draft deleted successfully" });
@@ -599,11 +735,11 @@ router.post("/", (req, res, next) => {
     { name: 'previousPayslip3', maxCount: 1 }
   ]);
 
- uploadMiddleware(req, res, (err) => {
+  uploadMiddleware(req, res, (err) => {
     if (err) {
-     
-      return res.status(400).json({ 
-        success: false, 
+
+      return res.status(400).json({
+        success: false,
         message: err.message,
         field: err.field  // This will tell you which field is the problem
       });
@@ -933,7 +1069,7 @@ router.post("/", (req, res, next) => {
         relievingLetter1Link = uploadResult.viewLink;
       }
     }
-    
+
     let relievingLetter2Link = null;
     if (relievingLetter2File) {
       const uploadResult = await googleDrive.uploadRelievingLetter2(
@@ -1295,7 +1431,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
 
     const pProps = userCheck.records[0].get("p").properties;
     const currentStatus = pProps.profileStatus;
-    
+
     // Preserve old document links
     let oldAadharDocumentLink = pProps.aadharDocumentLink || null;
     let oldNationalIdDocumentLink = pProps.nationalIdDocumentLink || null;
@@ -1594,7 +1730,7 @@ router.put("/resubmit/:userId", (req, res, next) => {
       );
       if (uploadResult.success) { relievingLetter1Link = uploadResult.viewLink; }
     }
-    
+
     let relievingLetter2Link = oldRelievingLetter2Link;
     if (relievingLetter2File) {
       if (oldRelievingLetter2Link) {
@@ -1900,23 +2036,23 @@ router.put("/admin-update-document/:userId", (req, res, next) => {
 
   // Map documentType → { uploadFn, dbField, deleteFn }
   const DOC_MAP = {
-    aadharDocument:          { uploadFn: 'uploadAadharImage',            dbField: 'aadharDocumentLink',            useAadhar: true },
-    panDocument:             { uploadFn: 'uploadPanImage',               dbField: 'panDocumentLink',               useAadhar: true },
-    nationalIdDocument:      { uploadFn: 'uploadNationalIdDocument',     dbField: 'nationalIdDocumentLink' },
-    ssnDocument:             { uploadFn: 'uploadSsnDocument',            dbField: 'ssnDocumentLink' },
-    tenthCertificate:        { uploadFn: 'uploadTenthCertificate',       dbField: 'tenthCertificateLink' },
-    twelfthCertificate:      { uploadFn: 'uploadTwelfthCertificate',     dbField: 'twelfthCertificateLink' },
-    graduationCertificate:   { uploadFn: 'uploadGraduationCertificate',  dbField: 'graduationCertificateLink' },
+    aadharDocument: { uploadFn: 'uploadAadharImage', dbField: 'aadharDocumentLink', useAadhar: true },
+    panDocument: { uploadFn: 'uploadPanImage', dbField: 'panDocumentLink', useAadhar: true },
+    nationalIdDocument: { uploadFn: 'uploadNationalIdDocument', dbField: 'nationalIdDocumentLink' },
+    ssnDocument: { uploadFn: 'uploadSsnDocument', dbField: 'ssnDocumentLink' },
+    tenthCertificate: { uploadFn: 'uploadTenthCertificate', dbField: 'tenthCertificateLink' },
+    twelfthCertificate: { uploadFn: 'uploadTwelfthCertificate', dbField: 'twelfthCertificateLink' },
+    graduationCertificate: { uploadFn: 'uploadGraduationCertificate', dbField: 'graduationCertificateLink' },
     postGraduationCertificate: { uploadFn: 'uploadPostGraduationCertificate', dbField: 'postGraduationCertificateLink' },
-    resumeDocument:          { uploadFn: 'uploadResume',                 dbField: 'resumeDocumentLink' },
-    visaDocument:            { uploadFn: 'uploadVisaDocument',           dbField: 'visaDocumentLink' },
-    profilePhoto:            { uploadFn: 'uploadProfilePhoto',           dbField: 'profilePhotoLink' },
-    relievingLetter1:        { uploadFn: 'uploadRelievingLetter1',       dbField: 'relievingLetter1Link' },
-    relievingLetter2:        { uploadFn: 'uploadRelievingLetter2',       dbField: 'relievingLetter2Link' },
-    pfPassbook:              { uploadFn: 'uploadPfPassbook',             dbField: 'pfPassbookLink' },
-    previousPayslip1:        { uploadFn: 'uploadPreviousPayslip1',      dbField: 'previousPayslip1Link' },
-    previousPayslip2:        { uploadFn: 'uploadPreviousPayslip2',      dbField: 'previousPayslip2Link' },
-    previousPayslip3:        { uploadFn: 'uploadPreviousPayslip3',      dbField: 'previousPayslip3Link' },
+    resumeDocument: { uploadFn: 'uploadResume', dbField: 'resumeDocumentLink' },
+    visaDocument: { uploadFn: 'uploadVisaDocument', dbField: 'visaDocumentLink' },
+    profilePhoto: { uploadFn: 'uploadProfilePhoto', dbField: 'profilePhotoLink' },
+    relievingLetter1: { uploadFn: 'uploadRelievingLetter1', dbField: 'relievingLetter1Link' },
+    relievingLetter2: { uploadFn: 'uploadRelievingLetter2', dbField: 'relievingLetter2Link' },
+    pfPassbook: { uploadFn: 'uploadPfPassbook', dbField: 'pfPassbookLink' },
+    previousPayslip1: { uploadFn: 'uploadPreviousPayslip1', dbField: 'previousPayslip1Link' },
+    previousPayslip2: { uploadFn: 'uploadPreviousPayslip2', dbField: 'previousPayslip2Link' },
+    previousPayslip3: { uploadFn: 'uploadPreviousPayslip3', dbField: 'previousPayslip3Link' },
     higherSchoolCertificate: { uploadFn: 'uploadHigherSchoolCertificate', dbField: 'higherSchoolCertificateLink' },
   };
 
@@ -2501,7 +2637,7 @@ router.post("/employee-transfer/:employeeNumber", relievingLetterUpload.single('
       }
     }
 
-    const setQuery = experienceType === 'EXPERIENCED' 
+    const setQuery = experienceType === 'EXPERIENCED'
       ? `SET p.experienceType = $experienceType, p.yearsOfExperience = $yearsOfExperience, p.relievingLetterLink = $link, p.relievingLetterUploadedAt = datetime()`
       : `SET p.experienceType = $experienceType, p.yearsOfExperience = null, p.relievingLetterLink = null, p.relievingLetterUploadedAt = null`;
 
