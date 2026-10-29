@@ -12,11 +12,26 @@ const getDriver = require("../lib/neo4j");
  * =================================================
  */
 router.post("/", async (req, res) => {
-  const { username, password } = req.body;
-  
-  // Get driver and create session
-  const driver = getDriver();
-  const session = driver.session();
+const { username, password } = req.body;
+
+if (
+  typeof username !== "string" ||
+  typeof password !== "string" ||
+  !username.trim() ||
+  !password
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Username and password must be valid strings"
+  });
+}
+
+
+const cleanUsername = username.trim();
+
+const driver = getDriver();
+const session = driver.session();
+
   
   try {
     
@@ -36,7 +51,7 @@ router.post("/", async (req, res) => {
               p.assignedCompany AS personalAssignedCompany,
               p.assignedClient AS personalAssignedClient,
               u.loginCount AS loginCount`,
-      { username }
+{ username: cleanUsername }
     );
 
     // Check if user exists
@@ -51,16 +66,30 @@ router.post("/", async (req, res) => {
     const record = result.records[0];
     
     // Check Role-Based Auth Configuration
-    const role = record.get("role");
-    const AUTH_CONFIG = require("../config/authConfig");
-    const authMethod = AUTH_CONFIG[role] || 'BOTH';
+  const rawRole = record.get("role");
 
-    if (authMethod === 'SSO_ONLY') {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Username and password login is not available for your account. Please use Microsoft SSO to log in." 
-      });
-    }
+const roles = Array.isArray(rawRole)
+  ? rawRole
+  : rawRole
+    ? [rawRole]
+    : [];
+
+const AUTH_CONFIG = require("../config/authConfig");
+
+const authMethods = roles.map(
+  role => AUTH_CONFIG[role] || "BOTH"
+);
+
+if (
+  roles.length > 0 &&
+  authMethods.every(method => method === "SSO_ONLY")
+) {
+  return res.status(403).json({
+    success: false,
+    message:
+      "Username and password login is not available for your account. Please use Microsoft SSO to log in."
+  });
+}
 
     const hash = record.get("hash");
     
