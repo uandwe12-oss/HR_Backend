@@ -34,7 +34,8 @@ router.get("/", async (req, res) => {
               p.nationality as nationality,
               COALESCE(p.employeeNumber, u.pid) as pid,
               u.createdAt as createdAt,
-              p.profileStatus as approvalStatus
+              p.profileStatus as approvalStatus,
+              (u.passwordHash IS NOT NULL AND u.passwordHash <> '') as hasPassword
        ORDER BY u.createdAt DESC`
     );
 
@@ -50,6 +51,7 @@ router.get("/", async (req, res) => {
       const createdAt = record.get("createdAt");
       const approvalStatus = record.get("approvalStatus");
       const nationality = record.get("nationality");
+      const hasPassword = Boolean(record.get("hasPassword"));
 
       const cleanVal = (val) => {
         if (!val) return null;
@@ -114,7 +116,8 @@ router.get("/", async (req, res) => {
         nationality: nationality || null,
         pid: pid || null,
         createdAt: formattedCreatedAt,
-        approvalStatus: approvalStatus || "PENDING"
+        approvalStatus: approvalStatus || "PENDING",
+        hasPassword: hasPassword
       };
     });
 
@@ -721,6 +724,82 @@ router.delete("/:username", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to delete user",
+      error: err.message
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+/**
+ * =================================================
+ * PUT – Reset / Update User Password (Admin or Self)
+ * =================================================
+ */
+router.put("/:username/password", async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  const { username } = req.params;
+  const { newPassword } = req.body;
+
+  try {
+    const requesterRoles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role];
+    const isAdmin = requesterRoles.includes("Admin");
+    const isSelf = req.user?.username && req.user.username.toLowerCase() === username.toLowerCase();
+
+    if (!isAdmin && !isSelf) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only Admins can reset user passwords."
+      });
+    }
+
+    if (!newPassword || typeof newPassword !== "string" || newPassword.trim().length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters long"
+      });
+    }
+
+    // Check if user exists
+    const checkResult = await session.run(
+      "MATCH (u:User) WHERE toLower(u.username) = toLower($username) RETURN u.username AS username",
+      { username }
+    );
+
+    if (!checkResult.records.length) {
+      return res.status(404).json({
+        success: false,
+        message: `User "${username}" not found`
+      });
+    }
+
+    const targetUsername = checkResult.records[0].get("username");
+
+    // Hash the password with bcrypt
+    const passwordHash = await bcrypt.hash(newPassword.trim(), 10);
+
+    await session.run(
+      `MATCH (u:User)
+       WHERE toLower(u.username) = toLower($targetUsername)
+       SET u.passwordHash = $passwordHash,
+           u.passwordUpdatedAt = datetime()
+       RETURN u.username AS username`,
+      { targetUsername, passwordHash }
+    );
+
+    console.log(`🔑 Password successfully updated for user: ${targetUsername} by ${req.user?.username || 'Admin'}`);
+
+    res.json({
+      success: true,
+      message: `Password updated successfully for ${targetUsername}`
+    });
+
+  } catch (err) {
+    console.error(`❌ Error updating password for ${username}:`, err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update password",
       error: err.message
     });
   } finally {
