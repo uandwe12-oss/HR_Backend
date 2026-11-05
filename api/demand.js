@@ -114,10 +114,17 @@ router.get("/", async (req, res) => {
       "MATCH (d:Demand) RETURN d ORDER BY d.createdDate DESC"
     );
 
+    const requesterRoles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role];
+    const isAdmin = requesterRoles.includes("Admin");
+
     const demands = result.records.map(r => {
       const d = { ...r.get("d").properties };
       if (d.clientName && typeof d.clientName === 'string') {
         d.clientName = d.clientName.trim();
+      }
+      if (!isAdmin) {
+        delete d.createdBy;
+        delete d.createdByUsername;
       }
       return d;
     });
@@ -412,6 +419,12 @@ router.put("/:id", async (req, res) => {
     );
     
     let updateData = { ...req.body };
+    if (updateData.createdBy === undefined || updateData.createdBy === null || updateData.createdBy === "") {
+      delete updateData.createdBy;
+    }
+    if (updateData.createdByUsername === undefined || updateData.createdByUsername === null || updateData.createdByUsername === "") {
+      delete updateData.createdByUsername;
+    }
     
     if (currentDemandResult.records.length > 0) {
       const currentDemand = currentDemandResult.records[0].get("d").properties;
@@ -466,6 +479,15 @@ router.put("/:id", async (req, res) => {
  */
 router.post("/", async (req, res) => {
   
+  const requesterRoles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role];
+  const isAdmin = requesterRoles.includes("Admin");
+  if (!isAdmin) {
+    return res.status(403).json({
+      success: false,
+      message: "Access denied. Only Admins can create demands."
+    });
+  }
+
   const driver = getDriver();
   const session = driver.session();
 
@@ -478,11 +500,16 @@ router.post("/", async (req, res) => {
     const nextIdRecord = idResult.records[0].get("nextId");
     const id = nextIdRecord.low !== undefined ? nextIdRecord.toNumber() : Number(nextIdRecord);
 
+    const createdBy = req.body.createdBy || req.user?.name || req.user?.username || "Unknown";
+    const createdByUsername = req.body.createdByUsername || req.user?.username || "";
+
     const demandData = {
       id,
       clientName: req.body.clientName || "",
       country: req.body.country || "",
       createdDate: req.body.createdDate || new Date().toISOString().split("T")[0],
+      createdBy: createdBy,
+      createdByUsername: createdByUsername,
       expFrom: Number(req.body.expFrom || 0),
       expTo: Number(req.body.expTo || 0),
       interviewer1: req.body.interviewer1 || "",
