@@ -10,14 +10,13 @@ const EXPORT_CONFIGS = [
     priorityKeys: ['Can_ID', 'id', 'email', 'name', 'phone', 'status', 'googleDriveViewLink'],
     cronSchedule: '0 0 * * *' // 12:00 AM
   },
-  
   {
     moduleName: 'Demand',
     query: 'MATCH (d:Demand) OPTIONAL MATCH (d)-[:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile) RETURN d, count(c) AS selectedCount ORDER BY d.createdDate DESC',
     fileName: 'demand_backup.xlsx',
     historyFile: 'demand_export_history.json',
     nodeKey: 'd',
-    priorityKeys: ['id', 'title', 'status', 'clientName', 'selectedCount'],
+    priorityKeys: ['id', 'title', 'status', 'clientName', 'createdBy', 'selectedCount'],
     cronSchedule: '5 0 * * *' // 12:05 AM
   },
   {
@@ -190,6 +189,15 @@ const EXPORT_CONFIGS = [
     nodeKey: 'c',
     priorityKeys: ['id', 'country'],
     cronSchedule: '35 1 * * *' // 1:35 AM
+  },
+  {
+    moduleName: 'HomeConfig',
+    query: 'MATCH (h:HomeConfig) RETURN h',
+    fileName: 'homeconfig_backup.xlsx',
+    historyFile: 'homeconfig_export_history.json',
+    nodeKey: 'h',
+    priorityKeys: ['country', 'role'],
+    cronSchedule: '40 1 * * *' // 1:40 AM
   }
 ];
 
