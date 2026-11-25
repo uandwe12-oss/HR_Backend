@@ -3,6 +3,78 @@ const router = express.Router();
 const multer = require('multer');
 const getDriver = require("../lib/neo4j");
 const crypto = require("crypto");
+const { sendLeaveApplicationEmail, sendLeaveStatusEmail } = require("../services/emailService");
+
+const isValidEmail = (email) => typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+const getDefaultLeaveNotificationEmails = () => {
+  const raw = process.env.ADMIN_EMAIL || 'swathi@uandwe.com';
+  const seen = new Set();
+  const emails = [];
+  raw.split(',').forEach((entry) => {
+    const clean = entry.trim().toLowerCase();
+    if (isValidEmail(clean) && !seen.has(clean)) {
+      seen.add(clean);
+      emails.push(clean);
+    }
+  });
+  return emails;
+};
+
+const getAdminEmails = async (session) => {
+  const seen = new Set();
+  const emails = [];
+
+  const addEmail = (raw) => {
+    if (!raw || typeof raw !== "string") return;
+    const trimmed = raw.trim();
+    if (!isValidEmail(trimmed)) return;
+    const lower = trimmed.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      emails.push(trimmed);
+    }
+  };
+
+  // Prefer Admin-configured Leave Notification Recipients from Neo4j if set
+  try {
+    const configResult = await session.run(`
+      MATCH (n:NotificationConfig { type: 'leaveRequest' })
+      RETURN n.emails AS emails
+    `);
+    if (configResult.records.length > 0) {
+      const dbEmails = configResult.records[0].get('emails') || [];
+      dbEmails.forEach(addEmail);
+      return emails;
+    }
+  } catch (cfgErr) {
+    console.warn("Warning loading leaveRequest NotificationConfig:", cfgErr.message);
+  }
+
+  getDefaultLeaveNotificationEmails().forEach(addEmail);
+
+  try {
+    const adminResult = await session.run(`
+      MATCH (a:User)
+      WHERE a.role = 'Admin' OR 'Admin' IN a.role
+      OPTIONAL MATCH (ap:PersonalDetails) WHERE toLower(ap.userId) = toLower(a.username)
+      RETURN NULLIF(trim(coalesce(ap.emailId, ap.workEmail, ap.professionalEmail)), '') AS workEmail, a.username AS username
+    `);
+    for (const record of adminResult.records) {
+      const workEmail = record.get("workEmail");
+      const username = record.get("username");
+      if (workEmail) {
+        addEmail(workEmail);
+      } else if (username && isValidEmail(username)) {
+        addEmail(username);
+      }
+    }
+  } catch (err) {
+    console.error("Error fetching admin emails:", err.message);
+  }
+
+  return emails;
+};
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -404,22 +476,39 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
     
     // Fetch user's team, supervisor, and HR
     const teamInfoResult = await session.run(`
-      MATCH (u:User {username: $userId})
+      MATCH (u:User) WHERE toLower(u.username) = toLower($userId)
       OPTIONAL MATCH (u)-[:MEMBER_OF]->(t:Team)
       OPTIONAL MATCH (s:User)-[:SUPERVISES]->(t)
+      OPTIONAL MATCH (sp:PersonalDetails)
+      WHERE toLower(sp.userId) = toLower(s.username) OR toLower(sp.emailId) = toLower(s.username)
       OPTIONAL MATCH (hr:User)-[:HR_FOR]->(t)
-      RETURN s.username AS supervisorId, hr.username AS hrId
+      OPTIONAL MATCH (u)-[:SUPERVISES]->(anyTeam:Team)
+      RETURN s.username AS supervisorId,
+             COALESCE(
+               NULLIF(trim(sp.emailId), ''),
+               NULLIF(trim(sp.workEmail), ''),
+               NULLIF(trim(sp.professionalEmail), '')
+             ) AS supervisorEmail,
+             t.name AS teamName,
+             hr.username AS hrId,
+             COUNT(anyTeam) > 0 AS supervisesAnyTeam
     `, { userId });
     
     let assignedSupervisorId = null;
+    let supervisorEmail = null;
+    let teamName = null;
     let assignedHrId = null;
+    let supervisesAnyTeam = false;
     
     if (teamInfoResult.records.length > 0) {
       assignedSupervisorId = teamInfoResult.records[0].get('supervisorId');
+      supervisorEmail = teamInfoResult.records[0].get('supervisorEmail');
+      teamName = teamInfoResult.records[0].get('teamName');
       assignedHrId = teamInfoResult.records[0].get('hrId');
+      supervisesAnyTeam = Boolean(teamInfoResult.records[0].get('supervisesAnyTeam'));
     }
 
-    const isRequesterSupervisor = (assignedSupervisorId === userId);
+    const isRequesterSupervisor = (assignedSupervisorId && userId && assignedSupervisorId.toLowerCase() === userId.toLowerCase()) || supervisesAnyTeam;
 
     let initialSupervisorStatus = 'N/A';
     if (assignedSupervisorId && !isRequesterSupervisor) {
@@ -523,6 +612,58 @@ router.post("/apply", upload.single('attachment'), async (req, res) => {
           createdAt: $createdAt
         })
       `, { message: notificationMsg, leaveId, createdAt });
+    }
+
+    // Send Email Notifications (Admin always; Team Supervisor only if requester is not a Supervisor)
+    try {
+      const adminEmails = await getAdminEmails(session);
+      const emailPayload = {
+        employeeName: employeeName || userId,
+        employeeNumber,
+        company,
+        leaveType,
+        startDate,
+        endDate,
+        totalDays: daysRequested,
+        isLOP,
+        lopDays,
+        reason,
+        customReason,
+        teamName
+      };
+
+      console.log(`📧 [Leave Apply Email] leaveId=${leaveId} | admins=${JSON.stringify(adminEmails)} | supervisor=${supervisorEmail || 'none'} | isRequesterSupervisor=${isRequesterSupervisor}`);
+
+      const emailPromises = [];
+
+      for (const adminEmail of adminEmails) {
+        emailPromises.push(
+          sendLeaveApplicationEmail({
+            ...emailPayload,
+            to: adminEmail,
+            recipientRole: 'Admin'
+          }).catch(err => console.error(`Failed to send leave application email to Admin (${adminEmail}):`, err.message))
+        );
+      }
+
+      if (!isRequesterSupervisor && supervisorEmail && isValidEmail(supervisorEmail)) {
+        const isDuplicateAdmin = adminEmails.some(a => a.toLowerCase() === supervisorEmail.toLowerCase());
+        if (!isDuplicateAdmin) {
+          emailPromises.push(
+            sendLeaveApplicationEmail({
+              ...emailPayload,
+              to: supervisorEmail,
+              recipientRole: 'Supervisor'
+            }).catch(err => console.error(`Failed to send leave application email to Supervisor (${supervisorEmail}):`, err.message))
+          );
+        }
+      }
+
+      if (emailPromises.length > 0) {
+        await Promise.allSettled(emailPromises);
+      }
+    } catch (emailErr) {
+      console.error("Error dispatching leave application emails:", emailErr.message);
     }
 
     res.json({
@@ -831,13 +972,35 @@ router.put("/status/:id", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid status" });
     }
 
-    // Get current leave request and check team
+    // Get current leave request, team, supervisor Work Email, and employee Work Email
     const getResult = await session.run(`
       MATCH (l:LeaveRequest {id: $id})
-      OPTIONAL MATCH (u:User {username: l.userId})-[:MEMBER_OF]->(t:Team)
+      OPTIONAL MATCH (u:User) WHERE toLower(u.username) = toLower(l.userId)
+      OPTIONAL MATCH (u)-[:MEMBER_OF]->(t:Team)
       OPTIONAL MATCH (s:User)-[:SUPERVISES]->(t)
+      OPTIONAL MATCH (sp:PersonalDetails)
+      WHERE toLower(sp.userId) = toLower(s.username) OR toLower(sp.emailId) = toLower(s.username)
       OPTIONAL MATCH (hr:User)-[:HR_FOR]->(t)
-      RETURN l, s.username AS teamSupervisorId, hr.username AS teamHrId, l.userId AS requesterId
+      OPTIONAL MATCH (u)-[:SUPERVISES]->(anyTeam:Team)
+      OPTIONAL MATCH (ep:PersonalDetails)
+      WHERE toLower(ep.userId) = toLower(l.userId)
+         OR toLower(ep.emailId) = toLower(l.userId)
+         OR (l.employeeNumber IS NOT NULL AND trim(l.employeeNumber) <> '' AND ep.employeeNumber = l.employeeNumber)
+      RETURN l,
+             s.username AS teamSupervisorId,
+             COALESCE(
+               NULLIF(trim(sp.emailId), ''),
+               NULLIF(trim(sp.workEmail), ''),
+               NULLIF(trim(sp.professionalEmail), '')
+             ) AS supervisorWorkEmail,
+             hr.username AS teamHrId,
+             l.userId AS requesterId,
+             COALESCE(
+               NULLIF(trim(ep.emailId), ''),
+               NULLIF(trim(ep.workEmail), ''),
+               NULLIF(trim(ep.professionalEmail), '')
+             ) AS employeeWorkEmail,
+             COUNT(anyTeam) > 0 AS supervisesAnyTeam
     `, { id });
     
     if (getResult.records.length === 0) {
@@ -845,10 +1008,13 @@ router.put("/status/:id", async (req, res) => {
     }
     const currentLeave = getResult.records[0].get('l').properties;
     const teamSupervisorId = getResult.records[0].get('teamSupervisorId');
+    const supervisorWorkEmail = getResult.records[0].get('supervisorWorkEmail');
     const teamHrId = getResult.records[0].get('teamHrId');
     const requesterId = getResult.records[0].get('requesterId');
+    const employeeWorkEmail = getResult.records[0].get('employeeWorkEmail');
+    const supervisesAnyTeam = Boolean(getResult.records[0].get('supervisesAnyTeam'));
     
-    const isRequesterSupervisor = (teamSupervisorId === requesterId);
+    const isRequesterSupervisor = (teamSupervisorId && requesterId && teamSupervisorId.toLowerCase() === requesterId.toLowerCase()) || supervisesAnyTeam;
 
     let newSupervisorStatus = currentLeave.supervisorStatus || 'Pending';
     let newHrStatus = currentLeave.hrStatus || 'Pending';
@@ -952,29 +1118,76 @@ router.put("/status/:id", async (req, res) => {
       `, { leaveId: id });
     }
 
-    // Send notification to employee only when overall status is resolved
+    // Send notification & Work Email to employee only when overall status is resolved
     if (newOverallStatus === 'Approved' || newOverallStatus === 'Rejected') {
       let employeeMessage = `Your ${leave.leaveType} request has been ${newOverallStatus}.`;
-    if (status === 'Approved' && leave.isLOP) {
-      employeeMessage += ` Note: ${leave.lopDays} days were treated as Loss Of Pay (LOP).`;
-    }
-    
-    await session.run(`
-      CREATE (n:Notification {
-        id: randomUUID(),
-        userId: $userId,
-        message: $message,
-        type: 'LEAVE_STATUS',
-        relatedId: $leaveId,
-        isRead: false,
-        createdAt: $createdAt
-      })
-    `, { 
-      userId: leave.userId, 
-      message: employeeMessage,
-      leaveId: leave.id,
-      createdAt: new Date().toISOString()
-    });
+      if (status === 'Approved' && leave.isLOP) {
+        employeeMessage += ` Note: ${leave.lopDays} days were treated as Loss Of Pay (LOP).`;
+      }
+      
+      await session.run(`
+        CREATE (n:Notification {
+          id: randomUUID(),
+          userId: $userId,
+          message: $message,
+          type: 'LEAVE_STATUS',
+          relatedId: $leaveId,
+          isRead: false,
+          createdAt: $createdAt
+        })
+      `, { 
+        userId: leave.userId, 
+        message: employeeMessage,
+        leaveId: leave.id,
+        createdAt: new Date().toISOString()
+      });
+
+      console.log(`📧 [Leave Status Email] leaveId=${leave.id} | prev=${currentLeave.status} -> next=${newOverallStatus} | employeeWorkEmail=${employeeWorkEmail || 'none'} | supervisorWorkEmail=${supervisorWorkEmail || 'none'} | isRequesterSupervisor=${isRequesterSupervisor}`);
+
+      if (String(currentLeave.status || '').trim().toLowerCase() !== newOverallStatus.toLowerCase()) {
+        const statusEmailBase = {
+          employeeName: leave.employeeName || leave.userId,
+          leaveType: leave.leaveType,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+          totalDays: leave.totalDays,
+          status: newOverallStatus,
+          isLOP: leave.isLOP,
+          lopDays: leave.lopDays,
+          remarks: remarks || ''
+        };
+
+        const statusEmailPromises = [];
+
+        if (employeeWorkEmail && isValidEmail(employeeWorkEmail)) {
+          statusEmailPromises.push(
+            sendLeaveStatusEmail({
+              ...statusEmailBase,
+              to: employeeWorkEmail,
+              recipientRole: 'Employee'
+            }).catch(err => console.error(`Failed to send leave status email to Employee (${employeeWorkEmail}):`, err.message))
+          );
+        } else {
+          console.warn(`⚠️ [Leave Status Email] Missing/invalid employeeWorkEmail for userId=${leave.userId}, empNo=${leave.employeeNumber}`);
+        }
+
+        if (!isRequesterSupervisor && supervisorWorkEmail && isValidEmail(supervisorWorkEmail)) {
+          const isSameAsEmployee = employeeWorkEmail && employeeWorkEmail.toLowerCase() === supervisorWorkEmail.toLowerCase();
+          if (!isSameAsEmployee) {
+            statusEmailPromises.push(
+              sendLeaveStatusEmail({
+                ...statusEmailBase,
+                to: supervisorWorkEmail,
+                recipientRole: 'Supervisor'
+              }).catch(err => console.error(`Failed to send leave status email to Supervisor (${supervisorWorkEmail}):`, err.message))
+            );
+          }
+        }
+
+        if (statusEmailPromises.length > 0) {
+          await Promise.allSettled(statusEmailPromises);
+        }
+      }
     }
 
     res.json({
@@ -1311,6 +1524,143 @@ router.delete("/admin/cancel/:id", async (req, res) => {
   } catch (error) {
     console.error("Error cancelling leave (admin):", error);
     res.status(500).json({ success: false, message: "Failed to cancel leave" });
+  } finally {
+    await session.close();
+  }
+});
+
+// 9. Get Leave Request Notification Recipients
+router.get('/notification-recipients', async (req, res) => {
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    const result = await session.run(`
+      MATCH (n:NotificationConfig { type: 'leaveRequest' })
+      RETURN n.emails AS emails, n.updatedAt AS updatedAt, n.updatedBy AS updatedBy
+    `);
+    if (result.records.length === 0) {
+      return res.json({
+        success: true,
+        recipients: getDefaultLeaveNotificationEmails(),
+        updatedAt: null,
+        updatedBy: null
+      });
+    }
+    const rec = result.records[0];
+    return res.json({
+      success: true,
+      recipients: rec.get('emails') || [],
+      updatedAt: rec.get('updatedAt'),
+      updatedBy: rec.get('updatedBy')
+    });
+  } catch (error) {
+    console.error('❌ Error fetching leave notification recipients:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch recipients', error: error.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// 10. Add a Leave Request Notification Recipient
+router.post('/notification-recipients', async (req, res) => {
+  const { email } = req.body;
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ success: false, message: 'A valid email address is required' });
+  }
+  const normalizedEmail = email.trim().toLowerCase();
+  const updatedBy = req.user?.email || req.user?.name || 'Admin';
+  const defaultEmails = getDefaultLeaveNotificationEmails();
+
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    const existingResult = await session.run(`
+      MATCH (n:NotificationConfig { type: 'leaveRequest' })
+      RETURN n.emails AS emails
+    `);
+
+    if (existingResult.records.length === 0) {
+      if (defaultEmails.includes(normalizedEmail)) {
+        await session.run(`
+          MERGE (n:NotificationConfig { type: 'leaveRequest' })
+          ON CREATE SET n.emails = $defaultEmails, n.createdAt = datetime(), n.updatedAt = datetime(), n.updatedBy = $updatedBy
+        `, { defaultEmails, updatedBy });
+        return res.json({
+          success: false,
+          message: 'Email already exists in the list',
+          recipients: defaultEmails
+        });
+      }
+      const initialEmails = [...defaultEmails, normalizedEmail];
+      await session.run(`
+        MERGE (n:NotificationConfig { type: 'leaveRequest' })
+        ON CREATE SET n.emails = $initialEmails, n.createdAt = datetime(), n.updatedAt = datetime(), n.updatedBy = $updatedBy
+      `, { initialEmails, updatedBy });
+      return res.json({
+        success: true,
+        message: `${normalizedEmail} added to notification recipients`,
+        recipients: initialEmails
+      });
+    }
+
+    const currentEmails = existingResult.records[0].get('emails') || [];
+    if (currentEmails.some(e => e.toLowerCase() === normalizedEmail)) {
+      return res.json({
+        success: false,
+        message: 'Email already exists in the list',
+        recipients: currentEmails
+      });
+    }
+
+    const updatedEmails = [...currentEmails, normalizedEmail];
+    await session.run(`
+      MATCH (n:NotificationConfig { type: 'leaveRequest' })
+      SET n.emails = $updatedEmails,
+          n.updatedAt = datetime(),
+          n.updatedBy = $updatedBy
+    `, { updatedEmails, updatedBy });
+
+    return res.json({
+      success: true,
+      message: `${normalizedEmail} added to notification recipients`,
+      recipients: updatedEmails
+    });
+  } catch (error) {
+    console.error('❌ Error adding leave notification recipient:', error);
+    res.status(500).json({ success: false, message: 'Failed to add recipient', error: error.message });
+  } finally {
+    await session.close();
+  }
+});
+
+// 11. Remove a Leave Request Notification Recipient
+router.delete('/notification-recipients/:email', async (req, res) => {
+  const emailToRemove = decodeURIComponent(req.params.email).trim().toLowerCase();
+  const updatedBy = req.user?.email || req.user?.name || 'Admin';
+  const defaultEmails = getDefaultLeaveNotificationEmails();
+
+  const driver = getDriver();
+  const session = driver.session();
+  try {
+    const result = await session.run(`
+      MERGE (n:NotificationConfig { type: 'leaveRequest' })
+      ON CREATE SET n.emails = $defaultEmails, n.createdAt = datetime()
+      WITH n
+      SET n.emails = [e IN coalesce(n.emails, $defaultEmails) WHERE toLower(trim(e)) <> $email],
+          n.updatedAt = datetime(),
+          n.updatedBy = $updatedBy
+      RETURN n.emails AS emails
+    `, { email: emailToRemove, updatedBy, defaultEmails });
+
+    const emails = result.records[0]?.get('emails') || [];
+    return res.json({
+      success: true,
+      message: `${emailToRemove} removed from notification recipients`,
+      recipients: emails
+    });
+  } catch (error) {
+    console.error('❌ Error removing leave notification recipient:', error);
+    res.status(500).json({ success: false, message: 'Failed to remove recipient', error: error.message });
   } finally {
     await session.close();
   }
