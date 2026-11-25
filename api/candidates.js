@@ -552,12 +552,12 @@ router.get("/all", async (req, res) => {
     if (page && limit) {
       const skip = (page - 1) * limit;
       
-      // Get total count (excluding joined candidates)
+      // Get total count (excluding joined & offer withdraw candidates)
       const countResult = await session.run(`
         MATCH (c:Candidate_Profile)
         WHERE NOT EXISTS {
           MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c)
-          WHERE r.status = 'Joined'
+          WHERE r.status IN ['Joined', 'Offer Withdraw']
         }
         ${searchCondition}
         RETURN count(c) as total
@@ -568,7 +568,7 @@ router.get("/all", async (req, res) => {
         `MATCH (c:Candidate_Profile) 
          WHERE NOT EXISTS {
            MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c)
-           WHERE r.status = 'Joined'
+           WHERE r.status IN ['Joined', 'Offer Withdraw']
          }
          ${searchCondition}
          RETURN c ${orderClause} SKIP $skip LIMIT $limit`,
@@ -598,7 +598,7 @@ router.get("/all", async (req, res) => {
         MATCH (c:Candidate_Profile) 
         WHERE NOT EXISTS {
           MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c)
-          WHERE r.status = 'Joined'
+          WHERE r.status IN ['Joined', 'Offer Withdraw']
         }
         RETURN c ORDER BY c.Can_ID DESC
       `);
@@ -858,7 +858,7 @@ router.get("/hidden-ids", async (req, res) => {
   try {
     const result = await session.run(`
       MATCH (d:Demand)-[r:HAS_SELECTED_CANDIDATE]->(c:Candidate_Profile)
-      WHERE r.status IN ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline']
+      WHERE r.status IN ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline', 'Offer Withdraw']
       RETURN c.Can_ID as canId, c.id as id
     `);
 
