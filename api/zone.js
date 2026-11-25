@@ -21,6 +21,7 @@ const toNumber = (value) => {
  */
 const ZONE_STATUSES = [
   'offer decline',
+  'offer withdraw',
   'client interview reject',
   'client screening reject',
   'screening reject',
@@ -36,12 +37,14 @@ const isZoneStatus = (status) => {
   const aliases = {
     'offer declined': 'offer decline',
     'offer reject': 'offer decline',
-    'offer rejected': 'offer decline'
+    'offer rejected': 'offer decline',
+    'offer withdraw': 'offer withdraw',
+    'offer withdrawn': 'offer withdraw'
   };
-  console.log("FINAL STATUS CHECK:", {
-    original: status,
-    normalized: status?.trim()?.toLowerCase()
-  });
+  // console.log("FINAL STATUS CHECK:", {
+  //   original: status,
+  //   normalized: status?.trim()?.toLowerCase()
+  // });
   const finalStatus = aliases[normalized] || normalized;
 
   return ZONE_STATUSES.includes(finalStatus);
