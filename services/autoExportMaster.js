@@ -21,9 +21,11 @@ class AutoExportService {
 
   async getExistingDriveFiles() {
     try {
-      const files = await listFiles();
       const baseName = this.fileName.replace('.xlsx', '');
-      // Match files starting with baseName (e.g., candidates_backup)
+      // Query Google Drive with pagination & specific search filter for this module
+      const files = await listFiles(`name contains '${baseName}'`);
+      
+      // Match files starting with baseName (e.g., candidates_backup_...) and ending with .xlsx
       const moduleFiles = files.filter(file => file.name && file.name.startsWith(baseName) && file.name.endsWith('.xlsx'));
       return moduleFiles;
     } catch (error) {
@@ -37,6 +39,37 @@ class AutoExportService {
     return new Intl.DateTimeFormat('en-CA', options).format(date);
   }
 
+  async enforceRetention() {
+    try {
+      const existingFiles = await this.getExistingDriveFiles();
+      
+      // Sort descending by createdTime (newest first, oldest last)
+      existingFiles.sort((a, b) => {
+        const timeA = new Date(a.createdTime).getTime() || 0;
+        const timeB = new Date(b.createdTime).getTime() || 0;
+        if (timeB !== timeA) return timeB - timeA;
+        return (b.name || '').localeCompare(a.name || '');
+      });
+
+      console.log(`[${this.moduleName}] 📁 Backups in Drive: ${existingFiles.length}/5 max`);
+
+      // If more than 5 days of backups exist (e.g. 6th backup uploaded, delete the 1st / oldest one)
+      if (existingFiles.length > 5) {
+        const filesToDelete = existingFiles.slice(5);
+        console.log(`[${this.moduleName}] 🗑️ Found ${filesToDelete.length} backup(s) exceeding 5-day limit. Deleting oldest...`);
+        for (const file of filesToDelete) {
+          console.log(`[${this.moduleName}] 🗑️ Deleting oldest backup: ${file.name} (ID: ${file.id})`);
+          const delResult = await deleteFileFromDrive(file.id);
+          if (!delResult || !delResult.success) {
+            console.error(`[${this.moduleName}] ❌ Failed to delete old backup ${file.name}:`, delResult?.error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`[${this.moduleName}] Error enforcing 5-day retention:`, error.message);
+    }
+  }
+
   async uploadAndEnforceRetention(buffer) {
     try {
       const baseName = this.fileName.replace('.xlsx', '');
@@ -48,18 +81,8 @@ class AutoExportService {
       if (uploadResult && uploadResult.success) {
         console.log(`[${this.moduleName}] ✅ New backup uploaded successfully: ${newFileName}`);
         
-        // Only enforce retention if upload was successful
-        const existingFiles = await this.getExistingDriveFiles();
-        // Sort descending by createdTime
-        existingFiles.sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
-        
-        if (existingFiles.length > 5) {
-          const filesToDelete = existingFiles.slice(5);
-          for (const file of filesToDelete) {
-            console.log(`[${this.moduleName}] 🗑️ Deleting old backup: ${file.name}`);
-            await deleteFileFromDrive(file.id);
-          }
-        }
+        // Enforce 5-day retention (if 6 files exist, deletes the oldest/1st day backup)
+        await this.enforceRetention();
       } else {
         console.log(`[${this.moduleName}] ⚠️ Upload failed, skipping retention cleanup.`);
       }
@@ -75,14 +98,28 @@ class AutoExportService {
       const existingFiles = await this.getExistingDriveFiles();
       if (!existingFiles || existingFiles.length === 0) return true; // No files exist, export needed
       
-      // Get the newest file
-      existingFiles.sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
+      const baseName = this.fileName.replace('.xlsx', '');
+      const todayDateStr = this.getISTDateString();
+      const todayFileName = `${baseName}_${todayDateStr}.xlsx`;
+
+      // Check if today's backup file already exists in Drive
+      const todayFileExists = existingFiles.some(file => file.name === todayFileName);
+      if (todayFileExists) {
+        return false;
+      }
+
+      // Check the newest file's createdTime
+      existingFiles.sort((a, b) => {
+        const timeA = new Date(a.createdTime).getTime() || 0;
+        const timeB = new Date(b.createdTime).getTime() || 0;
+        if (timeB !== timeA) return timeB - timeA;
+        return (b.name || '').localeCompare(a.name || '');
+      });
       const newestFile = existingFiles[0];
       
       const lastExportIST = this.getISTDateString(new Date(newestFile.createdTime));
-      const todayIST = this.getISTDateString();
       
-      return lastExportIST !== todayIST;
+      return lastExportIST !== todayDateStr;
     } catch (error) {
       console.error(`[${this.moduleName}] Error checking if export needed:`, error);
       return true;
@@ -198,6 +235,8 @@ class AutoExportService {
       await this.autoExportAndUpload();
     } else {
       console.log(`[${this.moduleName}] Initial export not needed.`);
+      // Enforce retention to clean up any past lingering backups exceeding 5 days
+      await this.enforceRetention();
     }
   }
 }
