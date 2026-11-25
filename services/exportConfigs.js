@@ -198,6 +198,51 @@ const EXPORT_CONFIGS = [
     nodeKey: 'h',
     priorityKeys: ['country', 'role'],
     cronSchedule: '40 1 * * *' // 1:40 AM
+  },
+  {
+    moduleName: 'DocumentFolder',
+    query: 'MATCH (f:DocumentFolder) OPTIONAL MATCH (parent:DocumentFolder)-[:HAS_SUBFOLDER]->(f) RETURN f, parent.name AS parentFolderName, parent.id AS parentFolderId ORDER BY f.createdAt DESC',
+    fileName: 'documentfolder_backup.xlsx',
+    historyFile: 'documentfolder_export_history.json',
+    nodeKey: 'f',
+    priorityKeys: ['id', 'name', 'category', 'status', 'vendorName', 'owner', 'startDate', 'endDate', 'alertDays', 'parentFolderName', 'createdAt', 'createdBy'],
+    cronSchedule: '45 1 * * *' // 1:45 AM
+  },
+  {
+    moduleName: 'DocumentItem',
+    query: 'MATCH (d:DocumentItem) OPTIONAL MATCH (f:DocumentFolder)-[:CONTAINS_DOCUMENT]->(d) RETURN d, f.name AS folderName, f.category AS folderCategory, f.id AS folderId ORDER BY d.uploadedAt DESC',
+    fileName: 'documentitem_backup.xlsx',
+    historyFile: 'documentitem_export_history.json',
+    nodeKey: 'd',
+    priorityKeys: ['id', 'name', 'originalName', 'formattedSize', 'fileSize', 'mimeType', 'folderName', 'folderCategory', 'viewLink', 'downloadLink', 'fileId', 'uploadedAt', 'uploadedBy'],
+    cronSchedule: '50 1 * * *' // 1:50 AM
+  },
+  {
+    moduleName: 'TrainingMaterial',
+    query: 'MATCH (t:Training_Material) RETURN t ORDER BY t.createdAt DESC',
+    fileName: 'trainingmaterial_backup.xlsx',
+    historyFile: 'trainingmaterial_export_history.json',
+    nodeKey: 't',
+    priorityKeys: ['id', 'title', 'category', 'description', 'fileType', 'viewLink', 'downloadLink', 'googleDriveFileId', 'createdAt', 'createdBy'],
+    cronSchedule: '55 1 * * *' // 1:55 AM
+  },
+  {
+    moduleName: 'Team',
+    query: 'MATCH (t:Team) OPTIONAL MATCH (s:User)-[:SUPERVISES]->(t) OPTIONAL MATCH (m:User)-[:MEMBER_OF]->(t) RETURN t, s.username AS supervisor, collect(DISTINCT m.username) AS members ORDER BY t.createdAt DESC',
+    fileName: 'team_backup.xlsx',
+    historyFile: 'team_export_history.json',
+    nodeKey: 't',
+    priorityKeys: ['id', 'name', 'supervisor', 'members', 'createdAt'],
+    cronSchedule: '5 2 * * *' // 2:05 AM
+  },
+  {
+    moduleName: 'SalaryAdvanceAccount',
+    query: 'MATCH (a:SalaryAdvanceAccount) RETURN a',
+    fileName: 'salaryadvanceaccount_backup.xlsx',
+    historyFile: 'salaryadvanceaccount_export_history.json',
+    nodeKey: 'a',
+    priorityKeys: ['employeeNumber', 'employeeName', 'salaryAdvanceRemaining', 'salaryAdvanceUsed', 'salaryAdvanceEligible'],
+    cronSchedule: '10 2 * * *' // 2:10 AM
   }
 ];
 
