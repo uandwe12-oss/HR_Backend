@@ -387,8 +387,8 @@ router.put("/status", async (req, res) => {
     const demand = getResult.records[0].get('d').properties;
     const clientName = demand.client || demand.clientName || demand.ClientName;
 
-    // Candidates in Joined, Pending Offer, Pending Joinee, or Offer Decline can only have their status changed by Admin
-    const LOCKED_STATUSES = ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline'];
+    // Candidates in Joined, Pending Offer, Pending Joinee, Offer Decline, or Offer Withdraw can only have their status changed by Admin
+    const LOCKED_STATUSES = ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline', 'Offer Withdraw'];
     const currentStatus = relationship.status;
 
     const userRoles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role || ''];
@@ -512,6 +512,7 @@ router.put("/status", async (req, res) => {
     // ADD TO ZONE FOR REJECTION STATUSES
     const rejectionStatuses = [
       'Offer Decline',
+      'Offer Withdraw',
       'Interview Reject',
       'Client Interview Reject',
       'Screening Reject',
@@ -766,8 +767,8 @@ router.put("/status-with-zone", async (req, res) => {
     const demand = getResult.records[0].get('d').properties;
     const clientName = demand.client || demand.clientName || demand.ClientName;
 
-    // Candidates in Joined, Pending Offer, Pending Joinee, or Offer Decline can only have their status changed by Admin
-    const LOCKED_STATUSES = ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline'];
+    // Candidates in Joined, Pending Offer, Pending Joinee, Offer Decline, or Offer Withdraw can only have their status changed by Admin
+    const LOCKED_STATUSES = ['Joined', 'Pending Offer', 'Pending Joinee', 'Offer Decline', 'Offer Withdraw'];
     const currentStatus = relationship.status;
 
     const userRoles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role || ''];
@@ -796,6 +797,7 @@ router.put("/status-with-zone", async (req, res) => {
     // Define rejection statuses
     const rejectionStatuses = [
       'Offer Decline',
+      'Offer Withdraw',
       'Interview Reject',
       'Client Interview Reject',
       'Screening Reject',
